@@ -198,7 +198,7 @@ def unstake():
             (user_id, "ALZ", return_amount + stake["accrued_reward"], "unstake", stake_id,
              f"Unstaking de {orig_amount} ALZ (retorno: {return_amount}, penalidade: {penalty})")
         )
-        print(f"[UNSTAKE] Registrado no ledger: {return_amount + stake["accrued_reward"]} ALZ para user {user_id} (unstake)")
+print(f"[UNSTAKE] Registrado no ledger: {return_amount + stake['accrued_reward']} ALZ para user {user_id} (unstake)")
 
         # Atualizar saldo disponível e staking_balance
         cursor.execute(
