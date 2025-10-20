@@ -2,7 +2,7 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import jwt
 from functools import wraps
@@ -74,7 +74,7 @@ def admin_login():
         token = jwt.encode({
             'username': username,
             'role': 'admin',
-            'exp': datetime.utcnow() + time.timedelta(hours=24)
+            'exp': datetime.utcnow() + timedelta(hours=24)
         }, ADMIN_JWT_SECRET, algorithm='HS256')
         
         return jsonify({
