@@ -398,10 +398,10 @@ def admin_login():
     
     return jsonify({"error": "Credenciais inválidas"}), 401
 
-# 🔄 Rota para o Site processar pagamentos - CORRIGIDA
+# 🔄 Rota para o Site processar pagamentos - CORRIGIDA (SEM CRÉDITO AUTOMÁTICO PIX)
 @app.route('/api/site/purchase', methods=['POST'])
 def site_process_purchase():
-    """Processar compra do site e creditar tokens"""
+    """Processar compra do site - TODOS OS PAGAMENTOS FICAM PENDENTES"""
     data = request.json
     email = data.get('email')
     amount = data.get('amount')
@@ -416,7 +416,7 @@ def site_process_purchase():
     try:
         cursor.execute("BEGIN")
         
-        # 1. Registrar pagamento PRIMEIRO
+        # 1. Registrar pagamento PRIMEIRO (SEMPRE PENDENTE)
         cursor.execute(
             "INSERT INTO payments (email, amount, method, status) VALUES (%s, %s, %s, 'pending') RETURNING id",
             (email, amount, method)
@@ -463,36 +463,18 @@ def site_process_purchase():
             )
             print(f"💰 Saldo criado para usuário {user_id}")
         
-        # 4. Para PIX: creditar tokens IMEDIATAMENTE
-        if method == 'pix':
-            cursor.execute(
-                "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                (amount, user_id)
-            )
-            
-            # 5. Registrar no ledger
-            cursor.execute(
-                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                (user_id, 'ALZ', amount, 'purchase', f'Compra via {method} - Site')
-            )
-            
-            # 6. Atualizar pagamento como completed apenas para PIX manual
-            cursor.execute(
-                "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-                (user_id, payment_id)
-            )
-        else:
-            # Para outros métodos, manter como pending até webhook
-            cursor.execute(
-                "UPDATE payments SET user_id = %s WHERE id = %s",
-                (user_id, payment_id)
-            )
+        # 4. ✅ CORREÇÃO: NUNCA creditar automaticamente - SEMPRE PENDENTE
+        # Apenas vincular usuário ao pagamento
+        cursor.execute(
+            "UPDATE payments SET user_id = %s WHERE id = %s",
+            (user_id, payment_id)
+        )
         
         conn.commit()
         
         return jsonify({
             "success": True,
-            "message": "Compra processada com sucesso!",
+            "message": "Compra processada com sucesso! Aguarde a confirmação do pagamento.",
             "payment_id": payment_id,
             "user_created": user_created,
             "wallet_address": wallet_address,
@@ -675,39 +657,32 @@ def site_admin_process_payments():
             for payment_id in payment_ids:
                 # Buscar pagamento pendente
                 cursor.execute(
-                    "SELECT id, email, amount FROM payments WHERE id = %s AND status = 'pending'",
+                    "SELECT id, email, amount, user_id FROM payments WHERE id = %s AND status = 'pending'",
                     (payment_id,)
                 )
                 payment = cursor.fetchone()
                 
-                if payment:
-                    # Buscar usuário pelo email
+                if payment and payment['user_id']:
+                    # Creditar tokens
                     cursor.execute(
-                        "SELECT id FROM users WHERE email = %s",
-                        (payment['email'],)
+                        "UPDATE balances SET available = available + %s WHERE user_id = %s",
+                        (payment['amount'], payment['user_id'])
                     )
-                    user = cursor.fetchone()
                     
-                    if user:
-                        # Creditar tokens
-                        cursor.execute(
-                            "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                            (payment['amount'], user['id'])
-                        )
-                        
-                        # Registrar no ledger
-                        cursor.execute(
-                            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                            (user['id'], 'ALZ', payment['amount'], 'purchase', f'Compra PIX processada - Payment ID: {payment_id}')
-                        )
-                        
-                        # Atualizar status do pagamento
-                        cursor.execute(
-                            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-                            (user['id'], payment_id)
-                        )
-                        
-                        processed_count += 1
+                    # Registrar no ledger
+                    cursor.execute(
+                        "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                        (payment['user_id'], 'ALZ', payment['amount'], 'purchase', f'Compra PIX processada - Payment ID: {payment_id}')
+                    )
+                    
+                    # Atualizar status do pagamento
+                    cursor.execute(
+                        "UPDATE payments SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+                        (payment_id,)
+                    )
+                    
+                    processed_count += 1
+                    print(f"✅ Tokens creditados para pagamento {payment_id}: {payment['amount']} ALZ")
             
             conn.commit()
             
