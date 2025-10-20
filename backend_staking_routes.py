@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, g
 from datetime import datetime, timedelta
 import uuid
-from database import get_db_connection
+from database_neon import get_db_connection
 
 # Simulação de banco de dados
 # Em um ambiente real, isso seria um ORM como SQLAlchemy com um banco de dados real (PostgreSQL, MySQL, etc.)
@@ -42,7 +42,7 @@ def get_user_id_from_token():
 def get_user_balance(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT available FROM balances WHERE user_id = ? AND asset = 'ALZ'", (user_id,))
+    cursor.execute("SELECT available FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user_id,))
     result = cursor.fetchone()
     conn.close()
     return result['available'] if result else 0.0
@@ -50,7 +50,7 @@ def get_user_balance(user_id):
 def update_user_balance(user_id, amount):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE balances SET available = available + ? WHERE user_id = ? AND asset = 'ALZ'", (amount, user_id))
+    cursor.execute("UPDATE balances SET available = available + %s WHERE user_id = %s AND asset = 'ALZ'", (amount, user_id))
     conn.commit()
     conn.close()
     return get_user_balance(user_id)
@@ -106,21 +106,21 @@ def stake():
 
         # Registrar entrada no ledger para o staking
         cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
             (user_id, "ALZ", -amount, "stake", stake_id, f"Staking de {amount} ALZ por {duration} dias")
         )
         print(f"[STAKING] Registrado no ledger: -{amount} ALZ para user {user_id} (stake)")
 
         # Atualizar saldo bloqueado e staking_balance na tabela de balances
         cursor.execute(
-            "UPDATE balances SET available = available - ?, staking_balance = staking_balance + ? WHERE user_id = ? AND asset = 'ALZ'",
+            "UPDATE balances SET available = available - %s, staking_balance = staking_balance + %s WHERE user_id = %s AND asset = 'ALZ'",
             (amount, amount, user_id)
         )
         print(f"[STAKING] Saldo do usuário {user_id} atualizado: available -= {amount}, staking_balance += {amount}")
 
         # Inserir o novo stake na tabela de stakes
         cursor.execute(
-            "INSERT INTO stakes (id, user_id, amount, duration, apy, start_date, end_date, estimated_reward, accrued_reward, status, auto_compound, last_reward_claim, days_remaining) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO stakes (id, user_id, amount, duration, apy, start_date, end_date, estimated_reward, accrued_reward, status, auto_compound, last_reward_claim, days_remaining) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (stake_id, user_id, amount, duration, apy, start_date.isoformat(), end_date.isoformat(), round(estimated_reward, 6), 0.0, "active", auto_compound, start_date.isoformat(), duration)
         )
         print(f"[STAKING] Novo stake inserido na tabela stakes: {stake_id}")
@@ -165,7 +165,7 @@ def unstake():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT * FROM stakes WHERE id = ? AND user_id = ?", (stake_id, user_id))
+        cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
         stake = cursor.fetchone()
         print(f"[UNSTAKE] Stake encontrado: {stake}")
 
@@ -194,21 +194,21 @@ def unstake():
         # Registrar entrada no ledger para o unstaking
         orig_amount = stake["amount"]
         cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
             (user_id, "ALZ", return_amount + stake["accrued_reward"], "unstake", stake_id,
              f"Unstaking de {orig_amount} ALZ (retorno: {return_amount}, penalidade: {penalty})")
         )
-print(f"[UNSTAKE] Registrado no ledger: {return_amount + stake['accrued_reward']} ALZ para user {user_id} (unstake)")
+        print(f"[UNSTAKE] Registrado no ledger: {return_amount + stake['accrued_reward']} ALZ para user {user_id} (unstake)")
 
         # Atualizar saldo disponível e staking_balance
         cursor.execute(
-            "UPDATE balances SET available = available + ?, staking_balance = staking_balance - ? WHERE user_id = ? AND asset = 'ALZ'",
+            "UPDATE balances SET available = available + %s, staking_balance = staking_balance - %s WHERE user_id = %s AND asset = 'ALZ'",
             (return_amount + stake["accrued_reward"], stake["amount"], user_id)
         )
-        print(f"[UNSTAKE] Saldo do usuário {user_id} atualizado: available += {return_amount + stake["accrued_reward"]}, staking_balance -= {stake["amount"]}")
+        print(f"[UNSTAKE] Saldo do usuário {user_id} atualizado: available += {return_amount + stake['accrued_reward']}, staking_balance -= {stake['amount']}")
 
         # Atualizar status do stake
-        cursor.execute("UPDATE stakes SET status = ?, accrued_reward = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", ("withdrawn", 0, stake_id))
+        cursor.execute("UPDATE stakes SET status = %s, accrued_reward = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", ("withdrawn", 0, stake_id))
         print(f"[UNSTAKE] Status do stake {stake_id} atualizado para 'withdrawn'.")
         conn.commit()
         print("[UNSTAKE] Transação de unstake comitada com sucesso.")
@@ -235,7 +235,7 @@ def claim_rewards():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT * FROM stakes WHERE id = ? AND user_id = ?", (stake_id, user_id))
+        cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
         stake = cursor.fetchone()
         print(f"[CLAIM_REWARDS] Stake encontrado: {stake}")
 
@@ -256,20 +256,20 @@ def claim_rewards():
 
         # Registrar entrada no ledger para a reivindicação de recompensas
         cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
             (user_id, "ALZ", rewards_to_claim, "claim_reward", stake_id, f"Recompensa de staking coletada: {rewards_to_claim} ALZ")
         )
         print(f"[CLAIM_REWARDS] Registrado no ledger: {rewards_to_claim} ALZ para user {user_id} (claim_reward)")
 
         # Creditar recompensas na carteira do usuário (saldo disponível)
         cursor.execute(
-               "UPDATE balances SET available = available + ?, staking_balance = staking_balance - ? WHERE user_id = ? AND asset = 'ALZ'",
+               "UPDATE balances SET available = available + %s, staking_balance = staking_balance - %s WHERE user_id = %s AND asset = 'ALZ'",
             (rewards_to_claim, rewards_to_claim, user_id)
         )
         print(f"[CLAIM_REWARDS] Saldo do usuário {user_id} atualizado: available += {rewards_to_claim}, staking_balance -= {rewards_to_claim}")
 
         # Atualizar o stake no banco de dados
-        cursor.execute("UPDATE stakes SET accrued_reward = ?, last_reward_claim = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (0, datetime.now().isoformat(), stake_id))
+        cursor.execute("UPDATE stakes SET accrued_reward = %s, last_reward_claim = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (0, datetime.now().isoformat(), stake_id))
         print(f"[CLAIM_REWARDS] Stake {stake_id} atualizado: accrued_reward = 0, last_reward_claim = {datetime.now().isoformat()}")
         conn.commit()
         print("[CLAIM_REWARDS] Transação de claim rewards comitada com sucesso.")
@@ -291,7 +291,7 @@ def get_my_stakes():
     user_id = get_user_id_from_token()
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM stakes WHERE user_id = ? AND status = ?", (user_id, "active"))
+    cursor.execute("SELECT * FROM stakes WHERE user_id = %s AND status = %s", (user_id, "active"))
     user_stakes_db = cursor.fetchall()
     conn.close()
 
@@ -332,7 +332,7 @@ def get_my_stakes():
                 # Atualiza o lastRewardClaim no banco de dados
                 conn_update = get_db_connection()
                 cursor_update = conn_update.cursor()
-                cursor_update.execute("UPDATE stakes SET accrued_reward = ?, last_reward_claim = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (stake["accruedReward"], now.isoformat(), stake["id"]))
+                cursor_update.execute("UPDATE stakes SET accrued_reward = %s, last_reward_claim = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s", (stake["accruedReward"], now.isoformat(), stake["id"]))
                 conn_update.commit()
                 conn_update.close()
                 stake["lastRewardClaim"] = now.isoformat()
@@ -349,7 +349,7 @@ def get_staking_history():
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT * FROM ledger_entries WHERE user_id = ? AND entry_type IN ('stake', 'unstake', 'stake_reward') ORDER BY created_at DESC",
+            "SELECT * FROM ledger_entries WHERE user_id = %s AND entry_type IN ('stake', 'unstake', 'stake_reward') ORDER BY created_at DESC",
             (user_id,)
         )
         history = cursor.fetchall()
@@ -389,4 +389,3 @@ if __name__ == '__main__':
         return jsonify({"user_id": user_id, "balance": balance})
 
     app.run(debug=True, port=5000)
-
