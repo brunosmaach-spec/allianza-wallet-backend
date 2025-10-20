@@ -6,6 +6,17 @@ from datetime import datetime, timedelta
 import time
 import jwt
 from functools import wraps
+import hmac
+import hashlib
+
+# Tentar importar stripe (opcional)
+try:
+    import stripe
+    STRIPE_AVAILABLE = True
+    print("✅ Stripe disponível")
+except ImportError:
+    STRIPE_AVAILABLE = False
+    print("⚠️ Stripe não disponível - funcionalidades de cartão limitadas")
 
 # Importar funções do banco
 try:
@@ -18,19 +29,47 @@ except ImportError as e:
 from generate_wallet import generate_polygon_wallet
 from backend_staking_routes import staking_bp
 
-print("Iniciando o servidor Flask...")
+print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*", "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"], "allow_headers": ["Content-Type", "Authorization"]}})
 
-# 🔐 Configurações de Segurança Admin
+# ✅ CORS CONFIGURADO PARA TODOS OS DOMÍNIOS
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "http://localhost:5173",        # Vite dev
+            "http://localhost:3000",        # Next.js dev
+            "https://allianza.tech",        # Site vitrine
+            "https://www.allianza.tech",    # Site vitrine (www)
+            "https://wallet.allianza.tech", # Wallet
+            "https://www.wallet.allianza.tech" # Wallet (www)
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }
+})
+
+# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN CORRIGIDAS
 ADMIN_USERS = {
     os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'admin123'),
     os.getenv('ADMIN_USER_2', 'admin2'): os.getenv('ADMIN_PASSWORD_2', 'admin456')
 }
 
-ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-key-change-in-production')
-SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'site-admin-token-secret')
+# ✅ TOKEN CORRETO - IGUAL AO FRONTEND
+ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza')
+SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+
+# Configurações de Pagamento
+STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
+NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
+
+# Configurar Stripe apenas se disponível
+if STRIPE_AVAILABLE:
+    stripe.api_key = os.getenv('STRIPE_SECRET_KEY', 'sk_test_your_secret_key_here')
+else:
+    print("⚠️ Stripe não configurado - funcionalidades de cartão desativadas")
 
 # Inicializa o banco de dados
 init_db()
@@ -58,6 +97,275 @@ def admin_required(f):
         
         return f(*args, **kwargs)
     return decorated_function
+
+# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE
+def process_automatic_payment(email, amount, method, external_id):
+    """Processar pagamento automaticamente e creditar tokens"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        print(f"🔄 Processando pagamento automático: {email} - {amount} ALZ - {method}")
+        
+        # Registrar pagamento
+        cursor.execute(
+            "INSERT INTO payments (email, amount, method, status, tx_hash) VALUES (%s, %s, %s, 'completed', %s) RETURNING id",
+            (email, amount, method, external_id)
+        )
+        payment_id = cursor.fetchone()['id']
+        print(f"✅ Pagamento registrado: ID {payment_id}")
+        
+        # Buscar ou criar usuário
+        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        
+        user_created = False
+        if not user:
+            # Criar usuário automaticamente
+            private_key, wallet_address = generate_polygon_wallet()
+            cursor.execute(
+                "INSERT INTO users (email, wallet_address, private_key) VALUES (%s, %s, %s) RETURNING id",
+                (email, wallet_address, private_key)
+            )
+            user_id = cursor.fetchone()['id']
+            user_created = True
+            print(f"👤 Usuário criado: {email} - Carteira: {wallet_address}")
+        else:
+            user_id = user['id']
+            wallet_address = user['wallet_address']
+            print(f"👤 Usuário existente: {email} - ID: {user_id}")
+        
+        # Verificar/criar saldo
+        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+                (user_id, 0.0)
+            )
+            print(f"💰 Saldo criado para usuário {user_id}")
+        
+        # Creditar tokens
+        cursor.execute(
+            "UPDATE balances SET available = available + %s WHERE user_id = %s",
+            (amount, user_id)
+        )
+        print(f"💰 Tokens creditados: {amount} ALZ para {email}")
+        
+        # Registrar no ledger
+        cursor.execute(
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+            (user_id, 'ALZ', amount, 'purchase', f'Compra automática via {method} - ID: {external_id}')
+        )
+        
+        # Atualizar pagamento
+        cursor.execute(
+            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+            (user_id, payment_id)
+        )
+        
+        conn.commit()
+        print(f"🎉 Pagamento automático processado com sucesso: {email} - {amount} ALZ")
+        
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "user_created": user_created,
+            "wallet_address": wallet_address
+        }
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro processamento automático: {e}")
+        raise
+    finally:
+        conn.close()
+
+# 💳 ROTA PARA CRIAR SESSÃO STRIPE (ADICIONADA)
+@app.route('/create-checkout-session', methods=['POST'])
+def create_checkout_session():
+    """Criar sessão de checkout Stripe"""
+    if not STRIPE_AVAILABLE:
+        return jsonify({'error': 'Stripe não disponível'}), 503
+        
+    try:
+        data = request.json
+        amount = data.get('amount')
+        email = data.get('email')
+        
+        if not amount or not email:
+            return jsonify({'error': 'Amount e email são obrigatórios'}), 400
+        
+        print(f"💳 Criando sessão Stripe: {email} - {amount} centavos")
+        
+        # Criar sessão de checkout
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': 'brl',
+                    'product_data': {
+                        'name': 'Allianza Tokens (ALZ)',
+                        'description': 'Compra de tokens ALZ para a plataforma Allianza'
+                    },
+                    'unit_amount': amount,
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            success_url='https://allianza.tech/success',
+            cancel_url='https://allianza.tech/cancel',
+            customer_email=email,
+            metadata={'email': email, 'amount_brl': amount / 100}
+        )
+        
+        print(f"✅ Sessão Stripe criada: {session.id}")
+        return jsonify({'id': session.id})
+        
+    except Exception as e:
+        print(f"❌ Erro criar sessão Stripe: {e}")
+        return jsonify({'error': str(e)}), 400
+
+# 🌐 WEBHOOKS PARA PAGAMENTOS AUTOMÁTICOS
+
+@app.route('/webhook/stripe', methods=['POST'])
+def stripe_webhook():
+    """Webhook para pagamentos Stripe (Cartão)"""
+    if not STRIPE_AVAILABLE:
+        return jsonify({'error': 'Stripe não disponível'}), 503
+        
+    try:
+        payload = request.get_data()
+        sig_header = request.headers.get('Stripe-Signature')
+        
+        print(f"📥 Webhook Stripe recebido: {request.headers}")
+        
+        # Verificar assinatura do webhook
+        try:
+            event = stripe.Webhook.construct_event(
+                payload, sig_header, STRIPE_WEBHOOK_SECRET
+            )
+        except ValueError as e:
+            print(f"❌ Payload inválido: {e}")
+            return jsonify({'error': 'Invalid payload'}), 400
+        except stripe.error.SignatureVerificationError as e:
+            print(f"❌ Assinatura inválida: {e}")
+            return jsonify({'error': 'Invalid signature'}), 401
+        
+        print(f"📊 Evento Stripe: {event['type']}")
+        
+        if event['type'] == 'payment_intent.succeeded':
+            payment_intent = event['data']['object']
+            email = payment_intent.get('receipt_email') or payment_intent['metadata'].get('email')
+            amount = payment_intent['amount'] / 100  # Converter de centavos para unidades
+            payment_id = payment_intent['id']
+            
+            if email and amount > 0:
+                result = process_automatic_payment(email, amount, 'credit_card', payment_id)
+                return jsonify(result), 200
+            else:
+                print("⚠️ Email ou valor inválido no webhook Stripe")
+                return jsonify({'error': 'Invalid email or amount'}), 400
+                
+        elif event['type'] == 'charge.succeeded':
+            charge = event['data']['object']
+            email = charge.get('billing_details', {}).get('email')
+            amount = charge['amount'] / 100
+            payment_id = charge['id']
+            
+            if email and amount > 0:
+                result = process_automatic_payment(email, amount, 'credit_card', payment_id)
+                return jsonify(result), 200
+        
+        return jsonify({'success': True, 'message': 'Event processed'}), 200
+        
+    except Exception as e:
+        print(f"❌ Erro webhook Stripe: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/webhook/nowpayments', methods=['POST'])
+def nowpayments_webhook():
+    """Webhook para pagamentos NowPayments (Cripto)"""
+    try:
+        # Verificar assinatura do webhook
+        received_signature = request.headers.get('x-nowpayments-ipn-signature')
+        payload = request.get_data(as_text=True)
+        
+        print(f"📥 Webhook NowPayments recebido")
+        print(f"📧 Headers: {dict(request.headers)}")
+        print(f"📦 Payload: {payload}")
+        
+        if not received_signature:
+            print("❌ Assinatura IPN não fornecida")
+            return jsonify({'error': 'Missing signature'}), 401
+        
+        # Calcular assinatura esperada
+        expected_signature = hmac.new(
+            bytes(NOWPAYMENTS_IPN_SECRET, 'utf-8'),
+            msg=bytes(payload, 'utf-8'),
+            digestmod=hashlib.sha512
+        ).hexdigest()
+        
+        # Verificar assinatura
+        if not hmac.compare_digest(received_signature, expected_signature):
+            print("❌ Assinatura IPN inválida")
+            return jsonify({'error': 'Invalid signature'}), 401
+        
+        data = request.json
+        print(f"📊 Dados NowPayments: {data}")
+        
+        # Processar diferentes status de pagamento
+        payment_status = data.get('payment_status')
+        if payment_status in ['finished', 'confirmed']:
+            email = data.get('customer_email') or data.get('buyer_email')
+            amount = float(data.get('pay_amount', 0))
+            payment_id = data.get('payment_id')
+            
+            if email and amount > 0:
+                # Processar pagamento automaticamente
+                result = process_automatic_payment(email, amount, 'crypto', payment_id)
+                print(f"✅ Pagamento NowPayments processado: {email} - {amount} ALZ")
+                return jsonify(result), 200
+            else:
+                print("⚠️ Dados incompletos no webhook NowPayments")
+                return jsonify({'error': 'Incomplete data'}), 400
+                
+        elif payment_status == 'failed':
+            payment_id = data.get('payment_id')
+            print(f"❌ Pagamento NowPayments falhou: {payment_id}")
+            return jsonify({'success': True, 'message': 'Payment failed logged'}), 200
+        else:
+            print(f"📊 Status intermediário NowPayments: {payment_status}")
+            return jsonify({'success': True, 'message': 'Intermediate status received'}), 200
+            
+    except Exception as e:
+        print(f"❌ Erro webhook NowPayments: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/webhook/mercadopago', methods=['POST'])
+def mercadopago_webhook():
+    """Webhook para pagamentos Mercado Pago (PIX/Cartão)"""
+    try:
+        data = request.json
+        print(f"📥 Webhook Mercado Pago: {data}")
+        
+        event_type = data.get('type')
+        event_action = data.get('action')
+        
+        if event_type == 'payment' and event_action == 'payment.created':
+            payment_data = data.get('data', {})
+            payment_id = payment_data.get('id')
+            
+            # Buscar detalhes do pagamento via API do Mercado Pago
+            # (seria necessário fazer uma requisição adicional)
+            
+        return jsonify({'success': True}), 200
+        
+    except Exception as e:
+        print(f"❌ Erro webhook Mercado Pago: {e}")
+        return jsonify({'error': str(e)}), 400
 
 # 🔑 Login Admin
 @app.route('/admin/login', methods=['POST'])
@@ -138,23 +446,30 @@ def site_process_purchase():
                 (user_id, 0.0)
             )
         
-        # 4. Creditar tokens IMEDIATAMENTE
-        cursor.execute(
-            "UPDATE balances SET available = available + %s WHERE user_id = %s",
-            (amount, user_id)
-        )
-        
-        # 5. Registrar no ledger
-        cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, 'ALZ', amount, 'purchase', f'Compra via {method} - Site')
-        )
-        
-        # 6. Atualizar pagamento como completed
-        cursor.execute(
-            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-            (user_id, payment_id)
-        )
+        # 4. Creditar tokens IMEDIATAMENTE (para PIX manual)
+        if method == 'pix':
+            cursor.execute(
+                "UPDATE balances SET available = available + %s WHERE user_id = %s",
+                (amount, user_id)
+            )
+            
+            # 5. Registrar no ledger
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, 'ALZ', amount, 'purchase', f'Compra via {method} - Site')
+            )
+            
+            # 6. Atualizar pagamento como completed apenas para PIX manual
+            cursor.execute(
+                "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+                (user_id, payment_id)
+            )
+        else:
+            # Para outros métodos, manter como pending até webhook
+            cursor.execute(
+                "UPDATE payments SET user_id = %s WHERE id = %s",
+                (user_id, payment_id)
+            )
         
         conn.commit()
         
@@ -351,11 +666,27 @@ def get_user_id_from_token(token):
 
 @app.before_request
 def authenticate_request():
-    if request.method == "OPTIONS":
-        from flask import make_response
-        return make_response("", 200)
-
-    if request.path in ["/register", "/login", "/first-time-setup", "/check-user"]:
+    # ✅ CORREÇÃO CRÍTICA: LISTA COMPLETA DE ROTAS PÚBLICAS
+    public_routes = [
+        "/health", 
+        "/system/info",
+        "/webhook/stripe", 
+        "/webhook/nowpayments", 
+        "/webhook/mercadopago",
+        "/register", 
+        "/login", 
+        "/first-time-setup", 
+        "/check-user",
+        "/api/site/purchase",
+        "/create-checkout-session",  # ✅ ADICIONAR ESTA
+        "/admin/login"               # ✅ ADICIONAR ESTA
+    ]
+    
+    # ✅ PERMITIR TODAS AS ROTAS DE ADMIN DO SITE
+    if request.path.startswith("/api/site/admin"):
+        return
+        
+    if request.method == "OPTIONS" or request.path in public_routes:
         return
 
     auth_header = request.headers.get("Authorization")
@@ -558,11 +889,60 @@ def check_user():
     finally:
         conn.close()
 
-# ... (manter todas as outras rotas existentes da wallet: /auth/me, /balances/me, /purchase, etc.)
+# Rota de health check
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Allianza Wallet Backend",
+        "version": "1.0.0",
+        "database": "Neon PostgreSQL"
+    }), 200
+
+# Rota para informações do sistema
+@app.route('/system/info', methods=['GET'])
+def system_info():
+    return jsonify({
+        "service": "Allianza Wallet Backend",
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat(),
+        "webhooks": {
+            "stripe": "/webhook/stripe",
+            "nowpayments": "/webhook/nowpayments",
+            "mercadopago": "/webhook/mercadopago"
+        },
+        "features": {
+            "stripe_available": STRIPE_AVAILABLE,
+            "neon_database": True
+        },
+        "cors_domains": [
+            "http://localhost:5173",
+            "https://allianza.tech", 
+            "https://wallet.allianza.tech"
+        ]
+    }), 200
 
 if __name__ == "__main__":
-    print("Tentando iniciar o servidor Flask...")
+    print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND")
+    print("=" * 60)
+    print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
+    print("🌐 Rotas públicas:")
+    print("   - GET  /health")
+    print("   - GET  /system/info") 
+    print("   - POST /api/site/purchase")
+    print("   - POST /register, /login, /first-time-setup, /check-user")
+    print("   - POST /create-checkout-session")  # ✅ ADICIONADA
+    print("🔐 Rotas admin (requer token):")
+    print("   - GET  /api/site/admin/payments")
+    print("   - GET  /api/site/admin/stats")
+    print("   - POST /api/site/admin/process-payments")
+    print("📞 Webhooks:")
+    print("   - POST /webhook/stripe")
+    print("   - POST /webhook/nowpayments")
+    print("=" * 60)
+    
     try:
-        app.run(debug=True, port=5000)
+        app.run(debug=True, port=5000, host='0.0.0.0')
     except Exception as e:
-        print(f"Erro ao iniciar o servidor Flask: {e}")
+        print(f"❌ Erro ao iniciar o servidor Flask: {e}")
