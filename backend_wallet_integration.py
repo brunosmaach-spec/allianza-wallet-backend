@@ -8,6 +8,7 @@ import jwt
 from functools import wraps
 import hmac
 import hashlib
+import secrets
 
 # Tentar importar stripe (opcional)
 try:
@@ -125,9 +126,13 @@ def process_automatic_payment(email, amount, method, external_id):
         if not user:
             # Criar usuário automaticamente
             private_key, wallet_address = generate_polygon_wallet()
+            # ✅ CORREÇÃO: Gerar senha temporária
+            temp_password = f"temp_{secrets.token_hex(8)}"
+            hashed_password = generate_password_hash(temp_password)
+            
             cursor.execute(
-                "INSERT INTO users (email, wallet_address, private_key) VALUES (%s, %s, %s) RETURNING id",
-                (email, wallet_address, private_key)
+                "INSERT INTO users (email, password, wallet_address, private_key, nickname) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (email, hashed_password, wallet_address, private_key, f"User_{email.split('@')[0]}")
             )
             user_id = cursor.fetchone()['id']
             user_created = True
@@ -393,7 +398,7 @@ def admin_login():
     
     return jsonify({"error": "Credenciais inválidas"}), 401
 
-# 🔄 Rota para o Site processar pagamentos
+# 🔄 Rota para o Site processar pagamentos - CORRIGIDA
 @app.route('/api/site/purchase', methods=['POST'])
 def site_process_purchase():
     """Processar compra do site e creditar tokens"""
@@ -411,32 +416,43 @@ def site_process_purchase():
     try:
         cursor.execute("BEGIN")
         
-        # 1. Registrar pagamento
+        # 1. Registrar pagamento PRIMEIRO
         cursor.execute(
             "INSERT INTO payments (email, amount, method, status) VALUES (%s, %s, %s, 'pending') RETURNING id",
             (email, amount, method)
         )
         payment_id = cursor.fetchone()['id']
         
-        # 2. Buscar ou criar usuário
-        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
+        # 2. Buscar usuário existente
+        cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
         user = cursor.fetchone()
         
         user_created = False
         wallet_address = None
+        user_id = None
         
         if not user:
-            # Criar usuário sem senha (será ativado no primeiro login na wallet)
+            # ✅ CORREÇÃO: Criar usuário com senha temporária
             private_key, wallet_address = generate_polygon_wallet()
+            
+            # Gerar senha temporária única
+            temp_password = f"temp_{secrets.token_hex(8)}"
+            hashed_password = generate_password_hash(temp_password)
+            
+            # Criar nickname baseado no email
+            nickname = f"User_{email.split('@')[0]}"
+            
             cursor.execute(
-                "INSERT INTO users (email, wallet_address, private_key) VALUES (%s, %s, %s) RETURNING id",
-                (email, wallet_address, private_key)
+                "INSERT INTO users (email, password, nickname, wallet_address, private_key) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (email, hashed_password, nickname, wallet_address, private_key)
             )
             user_id = cursor.fetchone()['id']
             user_created = True
+            print(f"👤 Usuário criado com senha temporária: {email}")
         else:
             user_id = user['id']
             wallet_address = user['wallet_address']
+            print(f"👤 Usuário existente: {email} - ID: {user_id}")
         
         # 3. Verificar/criar saldo
         cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
@@ -445,8 +461,9 @@ def site_process_purchase():
                 "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
                 (user_id, 0.0)
             )
+            print(f"💰 Saldo criado para usuário {user_id}")
         
-        # 4. Creditar tokens IMEDIATAMENTE (para PIX manual)
+        # 4. Para PIX: creditar tokens IMEDIATAMENTE
         if method == 'pix':
             cursor.execute(
                 "UPDATE balances SET available = available + %s WHERE user_id = %s",
