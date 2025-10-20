@@ -489,19 +489,40 @@ def site_process_purchase():
     finally:
         conn.close()
 
-# 🔄 Rota para Admin do Site
+# 🔄 Rota para Admin do Site - CORRIGIDA COM DEBUG
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
     """Listar pagamentos para o admin do site"""
-    admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    
-    if not admin_token or admin_token != SITE_ADMIN_TOKEN:
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     try:
+        auth_header = request.headers.get('Authorization', '')
+        print(f"🔐 DEBUG - Headers recebidos: {dict(request.headers)}")
+        print(f"🔐 DEBUG - Authorization header: {auth_header}")
+        
+        if not auth_header.startswith('Bearer '):
+            print("❌ DEBUG - Token não fornecido ou formato inválido")
+            return jsonify({"error": "Token não fornecido"}), 401
+        
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        
+        # 🔥 CORREÇÃO: Usar valor direto para garantir que funciona
+        expected_token = 'allianza_super_admin_2024_CdE25$$$'
+        # expected_token = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+        
+        print(f"🔐 DEBUG - Token recebido: '{admin_token}'")
+        print(f"🔐 DEBUG - Token esperado: '{expected_token}'")
+        print(f"🔐 DEBUG - Tokens iguais? {admin_token == expected_token}")
+        print(f"🔐 DEBUG - Comprimento token recebido: {len(admin_token)}")
+        print(f"🔐 DEBUG - Comprimento token esperado: {len(expected_token)}")
+        
+        if not admin_token or admin_token != expected_token:
+            print("❌ DEBUG - Token inválido")
+            return jsonify({"error": "Token inválido"}), 401
+        
+        print("✅ DEBUG - Token válido, processando requisição...")
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
         cursor.execute('''
             SELECT p.id, p.email, p.amount, p.method, p.status, p.created_at, 
                    p.processed_at, u.wallet_address, u.nickname
@@ -511,29 +532,45 @@ def site_admin_payments():
         ''')
         payments = cursor.fetchall()
         
+        print(f"✅ DEBUG - Retornando {len(payments)} pagamentos")
         return jsonify({
             "success": True,
             "data": [dict(payment) for payment in payments]
         }), 200
         
     except Exception as e:
+        print(f"❌ DEBUG - Erro: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
-        conn.close()
+        if 'conn' in locals():
+            conn.close()
 
-# 🔄 Rota para estatísticas do admin do site
+# 🔄 Rota para estatísticas do admin do site - CORRIGIDA
 @app.route('/api/site/admin/stats', methods=['GET'])
 def site_admin_stats():
     """Estatísticas para o admin do site"""
-    admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    
-    if not admin_token or admin_token != SITE_ADMIN_TOKEN:
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     try:
+        auth_header = request.headers.get('Authorization', '')
+        print(f"📊 DEBUG - Validando token para stats...")
+        
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Token não fornecido"}), 401
+        
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        
+        # 🔥 CORREÇÃO: Usar valor direto
+        expected_token = 'allianza_super_admin_2024_CdE25$$$'
+        # expected_token = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+        
+        if not admin_token or admin_token != expected_token:
+            print(f"❌ DEBUG - Token stats inválido: '{admin_token}' vs '{expected_token}'")
+            return jsonify({"error": "Token inválido"}), 401
+        
+        print("✅ DEBUG - Token stats válido")
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
         # Estatísticas de pagamentos
         cursor.execute('''
             SELECT 
@@ -575,83 +612,104 @@ def site_admin_stats():
         }), 200
         
     except Exception as e:
+        print(f"❌ DEBUG - Erro stats: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
-        conn.close()
+        if 'conn' in locals():
+            conn.close()
 
-# 🔄 Processar Pagamentos PIX Manualmente (Admin)
+# 🔄 Processar Pagamentos PIX Manualmente (Admin) - CORRIGIDA
 @app.route('/api/site/admin/process-payments', methods=['POST'])
 def site_admin_process_payments():
     """Processar pagamentos PIX manualmente"""
-    admin_token = request.headers.get('Authorization', '').replace('Bearer ', '')
-    
-    if not admin_token or admin_token != SITE_ADMIN_TOKEN:
-        return jsonify({"error": "Não autorizado"}), 401
-    
-    data = request.json
-    payment_ids = data.get('payment_ids', [])
-    
-    if not payment_ids:
-        return jsonify({"error": "Nenhum pagamento selecionado"}), 400
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
     try:
-        cursor.execute("BEGIN")
+        auth_header = request.headers.get('Authorization', '')
+        print(f"💰 DEBUG - Validando token para process-payments...")
         
-        processed_count = 0
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Token não fornecido"}), 401
         
-        for payment_id in payment_ids:
-            # Buscar pagamento pendente
-            cursor.execute(
-                "SELECT id, email, amount FROM payments WHERE id = %s AND status = 'pending'",
-                (payment_id,)
-            )
-            payment = cursor.fetchone()
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        
+        # 🔥 CORREÇÃO: Usar valor direto
+        expected_token = 'allianza_super_admin_2024_CdE25$$$'
+        # expected_token = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+        
+        if not admin_token or admin_token != expected_token:
+            print(f"❌ DEBUG - Token process-payments inválido")
+            return jsonify({"error": "Token inválido"}), 401
+        
+        print("✅ DEBUG - Token process-payments válido")
+        
+        data = request.json
+        payment_ids = data.get('payment_ids', [])
+        
+        if not payment_ids:
+            return jsonify({"error": "Nenhum pagamento selecionado"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
             
-            if payment:
-                # Buscar usuário pelo email
+            processed_count = 0
+            
+            for payment_id in payment_ids:
+                # Buscar pagamento pendente
                 cursor.execute(
-                    "SELECT id FROM users WHERE email = %s",
-                    (payment['email'],)
+                    "SELECT id, email, amount FROM payments WHERE id = %s AND status = 'pending'",
+                    (payment_id,)
                 )
-                user = cursor.fetchone()
+                payment = cursor.fetchone()
                 
-                if user:
-                    # Creditar tokens
+                if payment:
+                    # Buscar usuário pelo email
                     cursor.execute(
-                        "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                        (payment['amount'], user['id'])
+                        "SELECT id FROM users WHERE email = %s",
+                        (payment['email'],)
                     )
+                    user = cursor.fetchone()
                     
-                    # Registrar no ledger
-                    cursor.execute(
-                        "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                        (user['id'], 'ALZ', payment['amount'], 'purchase', f'Compra PIX processada - Payment ID: {payment_id}')
-                    )
-                    
-                    # Atualizar status do pagamento
-                    cursor.execute(
-                        "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-                        (user['id'], payment_id)
-                    )
-                    
-                    processed_count += 1
-        
-        conn.commit()
-        
-        return jsonify({
-            "success": True,
-            "message": f"{processed_count} pagamentos processados com sucesso",
-            "processed_count": processed_count
-        }), 200
-        
+                    if user:
+                        # Creditar tokens
+                        cursor.execute(
+                            "UPDATE balances SET available = available + %s WHERE user_id = %s",
+                            (payment['amount'], user['id'])
+                        )
+                        
+                        # Registrar no ledger
+                        cursor.execute(
+                            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                            (user['id'], 'ALZ', payment['amount'], 'purchase', f'Compra PIX processada - Payment ID: {payment_id}')
+                        )
+                        
+                        # Atualizar status do pagamento
+                        cursor.execute(
+                            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+                            (user['id'], payment_id)
+                        )
+                        
+                        processed_count += 1
+            
+            conn.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": f"{processed_count} pagamentos processados com sucesso",
+                "processed_count": processed_count
+            }), 200
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ DEBUG - Erro process-payments: {e}")
+            return jsonify({"error": str(e)}), 500
+        finally:
+            conn.close()
+            
     except Exception as e:
-        conn.rollback()
+        print(f"❌ DEBUG - Erro geral process-payments: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
 
 # ===== ROTAS EXISTENTES DA WALLET (MANTIDAS) =====
 
@@ -678,12 +736,12 @@ def authenticate_request():
         "/first-time-setup", 
         "/check-user",
         "/api/site/purchase",
-        "/create-checkout-session",  # ✅ ADICIONAR ESTA
-        "/admin/login"               # ✅ ADICIONAR ESTA
+        "/create-checkout-session",
+        "/admin/login"
     ]
     
-    # ✅ PERMITIR TODAS AS ROTAS DE ADMIN DO SITE
-    if request.path.startswith("/api/site/admin"):
+    # ✅ PERMITIR TODAS AS ROTAS DE ADMIN DO SITE E HEALTH
+    if request.path.startswith("/api/site/admin") or request.path == "/health":
         return
         
     if request.method == "OPTIONS" or request.path in public_routes:
@@ -932,7 +990,7 @@ if __name__ == "__main__":
     print("   - GET  /system/info") 
     print("   - POST /api/site/purchase")
     print("   - POST /register, /login, /first-time-setup, /check-user")
-    print("   - POST /create-checkout-session")  # ✅ ADICIONADA
+    print("   - POST /create-checkout-session")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
