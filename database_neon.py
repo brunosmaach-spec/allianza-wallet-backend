@@ -1,6 +1,6 @@
 import os
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -23,9 +23,9 @@ class NeonDatabase:
             raise ValueError("NEON_DATABASE_URL não configurada no .env")
         
         try:
-            conn = psycopg2.connect(
+            conn = psycopg.connect(
                 self.database_url,
-                cursor_factory=RealDictCursor,
+                row_factory=dict_row,
                 connect_timeout=10
             )
             return conn
@@ -36,7 +36,6 @@ class NeonDatabase:
     def init_db(self):
         """Inicializar tabelas no Neon"""
         conn = None
-        cursor = None
         
         try:
             conn = self.get_connection()
@@ -127,7 +126,7 @@ class NeonDatabase:
             ''')
             print("✅ Tabela 'stakes' criada/verificada")
 
-            # 🆕 TABELA DE PAGAMENTOS (Para o site de vendas)
+            # Tabela de pagamentos
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS payments (
                     id SERIAL PRIMARY KEY,
@@ -144,7 +143,7 @@ class NeonDatabase:
             ''')
             print("✅ Tabela 'payments' criada/verificada")
 
-            # 🆕 TABELA DE LOGS ADMINISTRATIVOS
+            # Tabela de logs administrativos
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS admin_logs (
                     id SERIAL PRIMARY KEY,
@@ -179,8 +178,6 @@ class NeonDatabase:
             print(f"❌ Erro ao criar tabelas: {e}")
             raise
         finally:
-            if cursor:
-                cursor.close()
             if conn:
                 conn.close()
 
