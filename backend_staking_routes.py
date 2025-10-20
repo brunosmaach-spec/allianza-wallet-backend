@@ -102,7 +102,7 @@ def stake():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        conn.execute("BEGIN TRANSACTION")
+        cursor.execute("BEGIN")
 
         # Registrar entrada no ledger para o staking
         cursor.execute(
@@ -189,7 +189,7 @@ def unstake():
             return_amount -= penalty
         print(f"[UNSTAKE] Valor a ser retornado: {return_amount}, Penalidade: {penalty}")
 
-        conn.execute("BEGIN TRANSACTION")
+        cursor.execute("BEGIN")
 
         # Registrar entrada no ledger para o unstaking
         orig_amount = stake["amount"]
@@ -252,7 +252,7 @@ def claim_rewards():
         rewards_to_claim = stake["accrued_reward"]
         print(f"[CLAIM_REWARDS] Recompensas a coletar: {rewards_to_claim}")
 
-        conn.execute("BEGIN TRANSACTION")
+        cursor.execute("BEGIN")
 
         # Registrar entrada no ledger para a reivindicação de recompensas
         cursor.execute(
