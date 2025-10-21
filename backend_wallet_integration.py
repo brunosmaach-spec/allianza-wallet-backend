@@ -95,11 +95,12 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CORS CONFIGURADO PARA TODOS OS DOMÍNIOS
+# ✅ CORS CONFIGURADO PARA TODOS OS DOMÍNIOS - CORREÇÃO DO CORS
 CORS(app, resources={
     r"/*": {
         "origins": [
             "http://localhost:5173",        # Vite dev
+            "http://localhost:5174",        # Vite dev (nova porta) ✅ ADICIONADO
             "http://localhost:3000",        # Next.js dev
             "https://allianza.tech",        # Site vitrine
             "https://www.allianza.tech",    # Site vitrine (www)
@@ -1001,6 +1002,7 @@ def system_info():
         },
         "cors_domains": [
             "http://localhost:5173",
+            "http://localhost:5174",  # ✅ ADICIONADO
             "https://allianza.tech", 
             "https://wallet.allianza.tech"
         ]
