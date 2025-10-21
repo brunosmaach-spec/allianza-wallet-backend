@@ -15,12 +15,20 @@ import secrets
 from dotenv import load_dotenv
 load_dotenv()
 
+print("=" * 60)
+print("🔧 DEBUG - VARIÁVEIS DE AMBIENTE")
+print("=" * 60)
+print(f"SITE_ADMIN_TOKEN: {os.getenv('SITE_ADMIN_TOKEN', 'NÃO ENCONTRADO')}")
+print(f"STRIPE_SECRET_KEY: {'✅ ENCONTRADO' if os.getenv('STRIPE_SECRET_KEY') else '❌ NÃO ENCONTRADO'}")
+print(f"NEON_DATABASE_URL: {'✅ ENCONTRADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
+print("=" * 60)
+
 print("🔍 Verificando variáveis de ambiente:")
 print(f"   STRIPE_SECRET_KEY: {'✅' if os.getenv('STRIPE_SECRET_KEY') else '❌'}")
 print(f"   NEON_DATABASE_URL: {'✅' if os.getenv('NEON_DATABASE_URL') else '❌'}")
 print(f"   SITE_ADMIN_TOKEN: {'✅' if os.getenv('SITE_ADMIN_TOKEN') else '❌'}")
 
-# ✅ SOLUÇÃO DEFINITIVA STRIPE - CORRIGIDA
+# ✅ INSTALAÇÃO FORÇADA DO STRIPE
 import sys
 import subprocess
 
@@ -267,15 +275,23 @@ def site_admin_manual_token_send():
     """Enviar tokens manualmente para qualquer email"""
     try:
         auth_header = request.headers.get('Authorization', '')
+        print(f"🔐 Header de autorização recebido: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
+            print("❌ Token não fornecido ou formato inválido")
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
         expected_token = SITE_ADMIN_TOKEN
         
+        print(f"🔑 Token recebido: {admin_token}")
+        print(f"🔑 Token esperado: {expected_token}")
+        
         if not admin_token or admin_token != expected_token:
+            print("❌ Token inválido")
             return jsonify({"error": "Token inválido"}), 401
+        
+        print("✅ Token válido, processando requisição...")
         
         data = request.json
         email = data.get('email')
@@ -711,15 +727,23 @@ def site_admin_payments():
     """Listar pagamentos para o admin do site"""
     try:
         auth_header = request.headers.get('Authorization', '')
+        print(f"🔐 Header de autorização recebido: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
+            print("❌ Token não fornecido ou formato inválido")
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
         expected_token = SITE_ADMIN_TOKEN
         
+        print(f"🔑 Token recebido: {admin_token}")
+        print(f"🔑 Token esperado: {expected_token}")
+        
         if not admin_token or admin_token != expected_token:
+            print("❌ Token inválido")
             return jsonify({"error": "Token inválido"}), 401
+        
+        print("✅ Token válido, processando requisição...")
         
         conn = get_db_connection()
         cursor = conn.cursor()
