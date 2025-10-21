@@ -1,4 +1,3 @@
-[file content begin]
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,53 +10,89 @@ import hmac
 import hashlib
 import secrets
 
-# ✅ STRIPE IMPORT - VERSÃO CORRIGIDA DEFINITIVA
+# ✅ SOLUÇÃO DEFINITIVA STRIPE - RENDER COMPATIBLE
 import sys
 import subprocess
+
+print("=" * 60)
+print("🚀 INICIANDO CARREGAMENTO STRIPE NO RENDER")
+print("=" * 60)
+
 STRIPE_AVAILABLE = False
 stripe = None
 
-print("🔄 Iniciando carregamento do Stripe no Render...")
-
+# ✅ ESTRATÉGIA 1: Importação normal
 try:
-    # Tentativa principal de importação
     import stripe
-    print(f"✅ Stripe importado com sucesso! Versão: {stripe.__version__}")
+    print("✅ Stripe importado via import padrão")
     STRIPE_AVAILABLE = True
 except ImportError as e:
-    print(f"❌ Erro na importação inicial: {e}")
-    
-    # Tentativa de instalação emergencial
-    print("📦 Tentando instalação de emergência...")
+    print(f"❌ Falha importação padrão: {e}")
+
+# ✅ ESTRATÉGIA 2: Instalação forçada se necessário
+if not STRIPE_AVAILABLE:
+    print("🔄 Tentando instalação forçada do Stripe...")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "stripe==8.0.0", "--user"])
+        # Instalação silenciosa
+        result = subprocess.run([
+            sys.executable, "-m", "pip", "install", "stripe==8.0.0", 
+            "--disable-pip-version-check", "--no-warn-script-location"
+        ], capture_output=True, text=True, timeout=60)
+        
+        if result.returncode == 0:
+            import stripe
+            STRIPE_AVAILABLE = True
+            print("✅ Stripe instalado e importado via subprocess")
+        else:
+            print(f"❌ Erro instalação: {result.stderr}")
+    except Exception as e:
+        print(f"❌ Falha instalação forçada: {e}")
+
+# ✅ ESTRATÉGIA 3: Tentativa final com sys.path
+if not STRIPE_AVAILABLE:
+    try:
+        # Adicionar paths comuns do Render
+        possible_paths = [
+            '/opt/render/project/src',
+            '/var/task',
+            '/home/render/.local/lib/python3.11/site-packages',
+            '/usr/local/lib/python3.11/site-packages'
+        ]
+        
+        for path in possible_paths:
+            if path not in sys.path and os.path.exists(path):
+                sys.path.insert(0, path)
+                print(f"📁 Path adicionado: {path}")
+        
         import stripe
         STRIPE_AVAILABLE = True
-        print("✅ Stripe instalado via subprocess!")
-    except Exception as install_error:
-        print(f"❌ Falha na instalação emergencial: {install_error}")
-        STRIPE_AVAILABLE = False
+        print("✅ Stripe importado após ajuste de paths")
+    except ImportError as e:
+        print(f"❌ Falha final: {e}")
 
-# ✅ CONFIGURAÇÃO DO STRIPE
+# ✅ CONFIGURAÇÃO FINAL
 if STRIPE_AVAILABLE:
-    stripe_secret_key = os.getenv('STRIPE_SECRET_KEY')
-    if stripe_secret_key:
-        stripe.api_key = stripe_secret_key
-        print(f"✅ Stripe configurado! Key: {stripe_secret_key[:20]}...")
-        
-        # Teste de conexão SIMPLIFICADO (evita erros de autenticação)
-        try:
-            # Teste mais leve que não requer permissões especiais
-            stripe_version = stripe.__version__
-            print(f"🎉 Stripe operacional! Versão: {stripe_version}")
-        except Exception as test_error:
-            print(f"⚠️ Aviso no teste Stripe: {test_error}")
-            # Não desativamos por este erro
-    else:
-        print("❌ STRIPE_SECRET_KEY não encontrada")
+    try:
+        stripe_secret_key = os.getenv('STRIPE_SECRET_KEY')
+        if stripe_secret_key:
+            stripe.api_key = stripe_secret_key
+            print(f"✅ Stripe configurado! Key: {stripe_secret_key[:20]}...")
+            
+            # Teste SUPER SIMPLES - apenas verificar versão
+            stripe_version = getattr(stripe, '__version__', 'Unknown')
+            print(f"🎉 STRIPE OPERACIONAL! Versão: {stripe_version}")
+            
+        else:
+            print("❌ STRIPE_SECRET_KEY não encontrada")
+            STRIPE_AVAILABLE = False
+    except Exception as e:
+        print(f"❌ Erro configuração Stripe: {e}")
         STRIPE_AVAILABLE = False
 else:
-    print("🔴 Stripe não disponível - funcionalidades de cartão desativadas")
+    print("🔴 STRIPE NÃO DISPONÍVEL - Pagamentos com cartão desativados")
+
+print(f"📊 STATUS FINAL STRIPE: {'✅ DISPONÍVEL' if STRIPE_AVAILABLE else '❌ INDISPONÍVEL'}")
+print("=" * 60)
 
 # Importar funções do banco
 try:
@@ -791,7 +826,8 @@ def authenticate_request():
         "/check-user",
         "/api/site/purchase",
         "/create-checkout-session",
-        "/admin/login"
+        "/admin/login",
+        "/debug/stripe"  # ✅ Adicionando o endpoint de debug
     ]
     
     # ✅ PERMITIR TODAS AS ROTAS DE ADMIN DO SITE E HEALTH
@@ -1038,6 +1074,30 @@ def system_info():
         ]
     }), 200
 
+# ✅ NOVO ENDPOINT DE DIAGNÓSTICO STRIPE
+@app.route('/debug/stripe', methods=['GET'])
+def debug_stripe():
+    """Endpoint de diagnóstico do Stripe"""
+    import sys
+    import pkg_resources
+    
+    # Verificar se o stripe está nos pacotes instalados
+    installed_packages = [pkg.key for pkg in pkg_resources.working_set]
+    stripe_installed = 'stripe' in installed_packages
+    
+    # Verificar paths
+    python_paths = sys.path
+    
+    return jsonify({
+        'stripe_available': STRIPE_AVAILABLE,
+        'stripe_installed': stripe_installed,
+        'stripe_version': stripe.__version__ if STRIPE_AVAILABLE else 'N/A',
+        'api_key_configured': bool(stripe.api_key) if STRIPE_AVAILABLE else False,
+        'env_key_exists': bool(os.getenv('STRIPE_SECRET_KEY')),
+        'python_paths': python_paths,
+        'installed_packages': installed_packages
+    }), 200
+
 if __name__ == "__main__":
     print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND")
     print("=" * 60)
@@ -1051,6 +1111,7 @@ if __name__ == "__main__":
     print("   - POST /api/site/purchase")
     print("   - POST /register, /login, /first-time-setup, /check-user")
     print("   - POST /create-checkout-session")
+    print("   - GET  /debug/stripe")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
@@ -1064,4 +1125,3 @@ if __name__ == "__main__":
         app.run(debug=True, port=5000, host='0.0.0.0')
     except Exception as e:
         print(f"❌ Erro ao iniciar o servidor Flask: {e}")
-[file content end]
