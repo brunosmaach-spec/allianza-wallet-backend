@@ -1,5 +1,5 @@
 from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask_cors import CORS, cross_origin
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
 from datetime import datetime, timedelta
@@ -95,20 +95,38 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CORS CONFIGURADO PARA TODOS OS DOMÍNIOS - CORREÇÃO DO CORS
+# ✅ CORREÇÃO DEFINITIVA DO CORS - CONFIGURAÇÃO MAIS AMPLA
 CORS(app, resources={
     r"/*": {
         "origins": [
             "http://localhost:5173",        # Vite dev
             "http://localhost:5174",        # Vite dev (nova porta) ✅ ADICIONADO
+            "http://127.0.0.1:5173",        # Vite dev (IP local)
+            "http://127.0.0.1:5174",        # Vite dev (IP local)
             "http://localhost:3000",        # Next.js dev
+            "http://127.0.0.1:3000",        # Next.js dev (IP local)
             "https://allianza.tech",        # Site vitrine
             "https://www.allianza.tech",    # Site vitrine (www)
             "https://wallet.allianza.tech", # Wallet
             "https://www.wallet.allianza.tech" # Wallet (www)
         ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+        "allow_headers": [
+            "Content-Type", 
+            "Authorization", 
+            "X-Requested-With",
+            "X-Request-ID",
+            "Accept",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers"
+        ],
+        "expose_headers": [
+            "Content-Range",
+            "X-Content-Range",
+            "Content-Length",
+            "Content-Type"
+        ],
         "supports_credentials": True,
         "max_age": 3600
     }
@@ -132,6 +150,40 @@ init_db()
 
 # Registrar blueprint de staking
 app.register_blueprint(staking_bp, url_prefix="/staking")
+
+# ✅ MIDDLEWARE PARA LIDAR COM REQUISIÇÕES OPTIONS (PREFLIGHT)
+@app.before_request
+def handle_options():
+    if request.method == 'OPTIONS':
+        response = jsonify({'status': 'OK'})
+        response.headers.add('Access-Control-Allow-Origin', request.headers.get('Origin', '*'))
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+        response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
+
+# ✅ MIDDLEWARE PARA ADICIONAR HEADERS CORS EM TODAS AS RESPOSTAS
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        "http://localhost:5173", "http://localhost:5174",
+        "http://127.0.0.1:5173", "http://127.0.0.1:5174", 
+        "http://localhost:3000", "http://127.0.0.1:3000",
+        "https://allianza.tech", "https://www.allianza.tech",
+        "https://wallet.allianza.tech", "https://www.wallet.allianza.tech"
+    ]
+    
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    else:
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5174')
+    
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Max-Age', '3600')
+    return response
 
 # 🔒 Middleware de Autenticação Admin
 def admin_required(f):
@@ -243,9 +295,13 @@ def process_automatic_payment(email, amount, method, external_id):
         conn.close()
 
 # 💳 ROTA PARA CRIAR SESSÃO STRIPE - VERSÃO CORRIGIDA DEFINITIVA
-@app.route('/create-checkout-session', methods=['POST'])
+@app.route('/create-checkout-session', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def create_checkout_session():
     """Criar sessão de checkout Stripe - VERSÃO CORRIGIDA"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     print(f"🔧 Recebida requisição para criar sessão Stripe")
     
     if not STRIPE_AVAILABLE:
@@ -454,8 +510,12 @@ def nowpayments_webhook():
         return jsonify({'error': str(e)}), 400
 
 # 🔑 Login Admin
-@app.route('/admin/login', methods=['POST'])
+@app.route('/admin/login', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def admin_login():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     data = request.json
     username = data.get('username')
     password = data.get('password')
@@ -479,9 +539,13 @@ def admin_login():
     return jsonify({"error": "Credenciais inválidas"}), 401
 
 # 🔄 Rota para o Site processar pagamentos
-@app.route('/api/site/purchase', methods=['POST'])
+@app.route('/api/site/purchase', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def site_process_purchase():
     """Processar compra do site - TODOS OS PAGAMENTOS FICAM PENDENTES"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     data = request.json
     email = data.get('email')
     amount = data.get('amount')
@@ -563,9 +627,13 @@ def site_process_purchase():
         conn.close()
 
 # 🔄 Rota para Admin do Site
-@app.route('/api/site/admin/payments', methods=['GET'])
+@app.route('/api/site/admin/payments', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def site_admin_payments():
     """Listar pagamentos para o admin do site"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     try:
         auth_header = request.headers.get('Authorization', '')
         
@@ -603,9 +671,13 @@ def site_admin_payments():
             conn.close()
 
 # 🔄 Rota para estatísticas do admin do site
-@app.route('/api/site/admin/stats', methods=['GET'])
+@app.route('/api/site/admin/stats', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def site_admin_stats():
     """Estatísticas para o admin do site"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     try:
         auth_header = request.headers.get('Authorization', '')
         
@@ -666,9 +738,13 @@ def site_admin_stats():
             conn.close()
 
 # 🔄 Processar Pagamentos PIX Manualmente (Admin)
-@app.route('/api/site/admin/process-payments', methods=['POST'])
+@app.route('/api/site/admin/process-payments', methods=['POST', 'OPTIONS'])
+@cross_origin()
 def site_admin_process_payments():
     """Processar pagamentos PIX manualmente"""
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     try:
         auth_header = request.headers.get('Authorization', '')
         
@@ -785,8 +861,12 @@ def authenticate_request():
     
     request.user_id = user_id
 
-@app.route("/register", methods=["POST"])
+@app.route("/register", methods=["POST", "OPTIONS"])
+@cross_origin()
 def register_user():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     data = request.json
     email = data.get("email")
     nickname = data.get("nickname")
@@ -835,8 +915,12 @@ def register_user():
     finally:
         conn.close()
 
-@app.route("/login", methods=["POST"])
+@app.route("/login", methods=["POST", "OPTIONS"])
+@cross_origin()
 def login_user():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     data = request.json
     email = data.get("email")
     password = data.get("password")
@@ -881,8 +965,12 @@ def login_user():
     finally:
         conn.close()
 
-@app.route("/first-time-setup", methods=["POST"])
+@app.route("/first-time-setup", methods=["POST", "OPTIONS"])
+@cross_origin()
 def first_time_setup():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     data = request.json
     email = data.get('email')
     password = data.get('password')
@@ -938,8 +1026,12 @@ def first_time_setup():
     finally:
         conn.close()
 
-@app.route("/check-user", methods=["POST"])
+@app.route("/check-user", methods=["POST", "OPTIONS"])
+@cross_origin()
 def check_user():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     data = request.json
     email = data.get('email')
     
@@ -972,8 +1064,12 @@ def check_user():
         conn.close()
 
 # ✅ ROTA DE HEALTH CHECK CORRIGIDA - SEM ERROS
-@app.route('/health', methods=['GET'])
+@app.route('/health', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def health_check():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
@@ -985,8 +1081,12 @@ def health_check():
     }), 200
 
 # ✅ Rota para informações do sistema
-@app.route('/system/info', methods=['GET'])
+@app.route('/system/info', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def system_info():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     return jsonify({
         "service": "Allianza Wallet Backend",
         "version": "1.0.0",
@@ -1003,14 +1103,20 @@ def system_info():
         "cors_domains": [
             "http://localhost:5173",
             "http://localhost:5174",  # ✅ ADICIONADO
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
             "https://allianza.tech", 
             "https://wallet.allianza.tech"
         ]
     }), 200
 
 # ✅ ENDPOINT DE DIAGNÓSTICO STRIPE
-@app.route('/debug/stripe', methods=['GET'])
+@app.route('/debug/stripe', methods=['GET', 'OPTIONS'])
+@cross_origin()
 def debug_stripe():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
     return jsonify({
         'stripe_available': STRIPE_AVAILABLE,
         'stripe_installed': STRIPE_AVAILABLE,
@@ -1019,6 +1125,97 @@ def debug_stripe():
         'env_key_exists': bool(os.getenv('STRIPE_SECRET_KEY')),
         'status': 'Operational' if STRIPE_AVAILABLE else 'Not Available'
     }), 200
+
+# ✅ ROTAS PARA BALANCES E LEDGER
+@app.route('/balances/me', methods=['GET', 'OPTIONS'])
+@cross_origin()
+def get_balances_me():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization token is missing or invalid"}), 401
+
+        token = auth_header.split(" ")[1]
+        user_id = get_user_id_from_token(token)
+
+        if not user_id:
+            return jsonify({"error": "Invalid authentication token"}), 401
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT available, locked, staking_balance FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user_id,))
+        balance_data = cursor.fetchone()
+        
+        balance = {
+            "asset": "ALZ",
+            "available_balance": 0.0,
+            "locked_balance": 0.0,
+            "staking_balance": 0.0,
+            "total_balance": 0.0
+        }
+        
+        if balance_data:
+            balance["available_balance"] = float(balance_data["available"]) if balance_data["available"] else 0.0
+            balance["locked_balance"] = float(balance_data["locked"]) if balance_data["locked"] else 0.0
+            balance["staking_balance"] = float(balance_data["staking_balance"]) if balance_data["staking_balance"] else 0.0
+            balance["total_balance"] = balance["available_balance"] + balance["staking_balance"]
+
+        return jsonify({
+            "balance": balance
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao buscar saldo: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/ledger/history', methods=['GET', 'OPTIONS'])
+@cross_origin()
+def get_ledger_history():
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'OK'}), 200
+        
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization token is missing or invalid"}), 401
+
+        token = auth_header.split(" ")[1]
+        user_id = get_user_id_from_token(token)
+
+        if not user_id:
+            return jsonify({"error": "Invalid authentication token"}), 401
+
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT id, asset, amount, entry_type, description, created_at 
+            FROM ledger_entries 
+            WHERE user_id = %s 
+            ORDER BY created_at DESC 
+            LIMIT %s OFFSET %s
+        ''', (user_id, limit, offset))
+        
+        entries = cursor.fetchall()
+        
+        return jsonify([dict(entry) for entry in entries]), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao buscar histórico do ledger: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 if __name__ == "__main__":
     print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND")
@@ -1043,6 +1240,9 @@ if __name__ == "__main__":
     print("📞 Webhooks:")
     print("   - POST /webhook/stripe")
     print("   - POST /webhook/nowpayments")
+    print("💰 Rotas protegidas:")
+    print("   - GET  /balances/me")
+    print("   - GET  /ledger/history")
     print("=" * 60)
     
     try:
