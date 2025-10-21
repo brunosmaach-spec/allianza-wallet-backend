@@ -2,6 +2,10 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
+from dotenv import load_dotenv
+
+# Carrega as variáveis de ambiente do arquivo .env
+load_dotenv()
 from datetime import datetime, timedelta
 import time
 import jwt
@@ -1047,7 +1051,7 @@ def health_check():
         "version": "1.0.0",
         "database": "Neon PostgreSQL",
         "stripe_available": STRIPE_AVAILABLE,
-        "stripe_version": stripe.__version__ if STRIPE_AVAILABLE else "N/A"
+        "stripe_version": getattr(stripe, '__version__', getattr(stripe, '_version', 'Unknown')) if STRIPE_AVAILABLE else "N/A"
     }), 200
 
 # Rota para informações do sistema
@@ -1064,7 +1068,7 @@ def system_info():
         },
         "features": {
             "stripe_available": STRIPE_AVAILABLE,
-            "stripe_version": stripe.__version__ if STRIPE_AVAILABLE else "N/A",
+            "stripe_version": getattr(stripe, '__version__', getattr(stripe, '_version', 'Unknown')) if STRIPE_AVAILABLE else "N/A",
             "neon_database": True
         },
         "cors_domains": [
@@ -1104,7 +1108,10 @@ if __name__ == "__main__":
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
     print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
     if STRIPE_AVAILABLE:
-        print(f"📦 Versão do Stripe: {stripe.__version__}")
+        stripe_version = getattr(stripe, '__version__', None)
+        if stripe_version is None:
+            stripe_version = getattr(stripe, '_version', 'Unknown')
+        print(f"📦 Versão do Stripe: {stripe_version}")
     print("🌐 Rotas públicas:")
     print("   - GET  /health")
     print("   - GET  /system/info") 
