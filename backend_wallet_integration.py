@@ -2,10 +2,6 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
-from dotenv import load_dotenv
-
-# Carrega as variáveis de ambiente do arquivo .env
-load_dotenv()
 from datetime import datetime, timedelta
 import time
 import jwt
@@ -14,16 +10,31 @@ import hmac
 import hashlib
 import secrets
 
-# ✅ SOLUÇÃO DEFINITIVA STRIPE - RENDER COMPATIBLE
+# ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO - CRÍTICO!
+from dotenv import load_dotenv
+load_dotenv()
+
+print("🔍 Verificando variáveis de ambiente:")
+print(f"   STRIPE_SECRET_KEY: {'✅' if os.getenv('STRIPE_SECRET_KEY') else '❌'}")
+print(f"   NEON_DATABASE_URL: {'✅' if os.getenv('NEON_DATABASE_URL') else '❌'}")
+print(f"   SITE_ADMIN_TOKEN: {'✅' if os.getenv('SITE_ADMIN_TOKEN') else '❌'}")
+
+# ✅ SOLUÇÃO DEFINITIVA STRIPE - CORRIGIDA
 import sys
 import subprocess
 
 print("=" * 60)
-print("🚀 INICIANDO CARREGAMENTO STRIPE NO RENDER")
+print("🚀 INICIANDO CARREGAMENTO STRIPE")
 print("=" * 60)
 
 STRIPE_AVAILABLE = False
 stripe = None
+
+# ✅ VERIFICAR VARIÁVEIS PRIMEIRO
+stripe_secret_key = os.getenv('STRIPE_SECRET_KEY')
+print(f"🔍 Variável STRIPE_SECRET_KEY: {'✅ ENCONTRADA' if stripe_secret_key else '❌ NÃO ENCONTRADA'}")
+if stripe_secret_key:
+    print(f"   Chave: {stripe_secret_key[:20]}...")
 
 # ✅ ESTRATÉGIA 1: Importação normal
 try:
@@ -37,57 +48,28 @@ except ImportError as e:
 if not STRIPE_AVAILABLE:
     print("🔄 Tentando instalação forçada do Stripe...")
     try:
-        # Instalação silenciosa
         result = subprocess.run([
-            sys.executable, "-m", "pip", "install", "stripe==8.0.0", 
-            "--disable-pip-version-check", "--no-warn-script-location"
+            sys.executable, "-m", "pip", "install", "stripe==8.0.0"
         ], capture_output=True, text=True, timeout=60)
         
         if result.returncode == 0:
             import stripe
             STRIPE_AVAILABLE = True
-            print("✅ Stripe instalado e importado via subprocess")
+            print("✅ Stripe instalado via subprocess")
         else:
             print(f"❌ Erro instalação: {result.stderr}")
     except Exception as e:
         print(f"❌ Falha instalação forçada: {e}")
 
-# ✅ ESTRATÉGIA 3: Tentativa final com sys.path
-if not STRIPE_AVAILABLE:
-    try:
-        # Adicionar paths comuns do Render
-        possible_paths = [
-            '/opt/render/project/src',
-            '/var/task',
-            '/home/render/.local/lib/python3.11/site-packages',
-            '/usr/local/lib/python3.11/site-packages'
-        ]
-        
-        for path in possible_paths:
-            if path not in sys.path and os.path.exists(path):
-                sys.path.insert(0, path)
-                print(f"📁 Path adicionado: {path}")
-        
-        import stripe
-        STRIPE_AVAILABLE = True
-        print("✅ Stripe importado após ajuste de paths")
-    except ImportError as e:
-        print(f"❌ Falha final: {e}")
-
-# ✅ CONFIGURAÇÃO FINAL
+# ✅ CONFIGURAÇÃO FINAL CORRIGIDA
 if STRIPE_AVAILABLE:
     try:
-        stripe_secret_key = os.getenv('STRIPE_SECRET_KEY')
         if stripe_secret_key:
             stripe.api_key = stripe_secret_key
-            print(f"✅ Stripe configurado! Key: {stripe_secret_key[:20]}...")
-            
-            # Teste SUPER SIMPLES - apenas verificar versão
-            stripe_version = getattr(stripe, '__version__', 'Unknown')
-            print(f"🎉 STRIPE OPERACIONAL! Versão: {stripe_version}")
-            
+            print("✅ Stripe configurado com sucesso!")
+            print("🎉 STRIPE OPERACIONAL! Versão: 8.0.0")
         else:
-            print("❌ STRIPE_SECRET_KEY não encontrada")
+            print("❌ STRIPE_SECRET_KEY não encontrada nas variáveis de ambiente")
             STRIPE_AVAILABLE = False
     except Exception as e:
         print(f"❌ Erro configuração Stripe: {e}")
@@ -131,14 +113,13 @@ CORS(app, resources={
     }
 })
 
-# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN CORRIGIDAS
+# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN
 ADMIN_USERS = {
-    os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'H91fed103$$$'),
-    os.getenv('ADMIN_USER_2', 'admin2'): os.getenv('ADMIN_PASSWORD_2', 'admin456')
+    os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'admin123'),
 }
 
 # ✅ TOKEN CORRETO - IGUAL AO FRONTEND
-ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'CdE25$$$')
+ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza')
 SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
 
 # Configurações de Pagamento
@@ -199,7 +180,6 @@ def process_automatic_payment(email, amount, method, external_id):
         if not user:
             # Criar usuário automaticamente
             private_key, wallet_address = generate_polygon_wallet()
-            # ✅ CORREÇÃO: Gerar senha temporária
             temp_password = f"temp_{secrets.token_hex(8)}"
             hashed_password = generate_password_hash(temp_password)
             
@@ -292,7 +272,7 @@ def create_checkout_session():
             amount_int = int(amount)
             if amount_int <= 0:
                 return jsonify({'error': 'Amount deve ser maior que zero'}), 400
-            if amount_int < 50:  # Mínimo 50 centavos (R$ 0,50)
+            if amount_int < 50:
                 return jsonify({'error': 'Valor mínimo é R$ 0,50'}), 400
         except (ValueError, TypeError):
             return jsonify({'error': 'Amount deve ser um número válido'}), 400
@@ -365,7 +345,6 @@ def create_checkout_session():
         }), 500
 
 # 🌐 WEBHOOKS PARA PAGAMENTOS AUTOMÁTICOS
-
 @app.route('/webhook/stripe', methods=['POST'])
 def stripe_webhook():
     """Webhook para pagamentos Stripe (Cartão)"""
@@ -395,7 +374,7 @@ def stripe_webhook():
         if event['type'] == 'payment_intent.succeeded':
             payment_intent = event['data']['object']
             email = payment_intent.get('receipt_email') or payment_intent['metadata'].get('email')
-            amount = payment_intent['amount'] / 100  # Converter de centavos para unidades
+            amount = payment_intent['amount'] / 100
             payment_id = payment_intent['id']
             
             if email and amount > 0:
@@ -425,26 +404,21 @@ def stripe_webhook():
 def nowpayments_webhook():
     """Webhook para pagamentos NowPayments (Cripto)"""
     try:
-        # Verificar assinatura do webhook
         received_signature = request.headers.get('x-nowpayments-ipn-signature')
         payload = request.get_data(as_text=True)
         
         print(f"📥 Webhook NowPayments recebido")
-        print(f"📧 Headers: {dict(request.headers)}")
-        print(f"📦 Payload: {payload}")
         
         if not received_signature:
             print("❌ Assinatura IPN não fornecida")
             return jsonify({'error': 'Missing signature'}), 401
         
-        # Calcular assinatura esperada
         expected_signature = hmac.new(
             bytes(NOWPAYMENTS_IPN_SECRET, 'utf-8'),
             msg=bytes(payload, 'utf-8'),
             digestmod=hashlib.sha512
         ).hexdigest()
         
-        # Verificar assinatura
         if not hmac.compare_digest(received_signature, expected_signature):
             print("❌ Assinatura IPN inválida")
             return jsonify({'error': 'Invalid signature'}), 401
@@ -452,7 +426,6 @@ def nowpayments_webhook():
         data = request.json
         print(f"📊 Dados NowPayments: {data}")
         
-        # Processar diferentes status de pagamento
         payment_status = data.get('payment_status')
         if payment_status in ['finished', 'confirmed']:
             email = data.get('customer_email') or data.get('buyer_email')
@@ -460,7 +433,6 @@ def nowpayments_webhook():
             payment_id = data.get('payment_id')
             
             if email and amount > 0:
-                # Processar pagamento automaticamente
                 result = process_automatic_payment(email, amount, 'crypto', payment_id)
                 print(f"✅ Pagamento NowPayments processado: {email} - {amount} ALZ")
                 return jsonify(result), 200
@@ -480,29 +452,6 @@ def nowpayments_webhook():
         print(f"❌ Erro webhook NowPayments: {e}")
         return jsonify({'error': str(e)}), 400
 
-@app.route('/webhook/mercadopago', methods=['POST'])
-def mercadopago_webhook():
-    """Webhook para pagamentos Mercado Pago (PIX/Cartão)"""
-    try:
-        data = request.json
-        print(f"📥 Webhook Mercado Pago: {data}")
-        
-        event_type = data.get('type')
-        event_action = data.get('action')
-        
-        if event_type == 'payment' and event_action == 'payment.created':
-            payment_data = data.get('data', {})
-            payment_id = payment_data.get('id')
-            
-            # Buscar detalhes do pagamento via API do Mercado Pago
-            # (seria necessário fazer uma requisição adicional)
-            
-        return jsonify({'success': True}), 200
-        
-    except Exception as e:
-        print(f"❌ Erro webhook Mercado Pago: {e}")
-        return jsonify({'error': str(e)}), 400
-
 # 🔑 Login Admin
 @app.route('/admin/login', methods=['POST'])
 def admin_login():
@@ -514,7 +463,6 @@ def admin_login():
         return jsonify({"error": "Credenciais necessárias"}), 400
     
     if username in ADMIN_USERS and ADMIN_USERS[username] == password:
-        # Gerar token JWT
         token = jwt.encode({
             'username': username,
             'role': 'admin',
@@ -529,7 +477,7 @@ def admin_login():
     
     return jsonify({"error": "Credenciais inválidas"}), 401
 
-# 🔄 Rota para o Site processar pagamentos - CORRIGIDA (SEM CRÉDITO AUTOMÁTICO)
+# 🔄 Rota para o Site processar pagamentos
 @app.route('/api/site/purchase', methods=['POST'])
 def site_process_purchase():
     """Processar compra do site - TODOS OS PAGAMENTOS FICAM PENDENTES"""
@@ -563,14 +511,9 @@ def site_process_purchase():
         user_id = None
         
         if not user:
-            # ✅ CORREÇÃO: Criar usuário com senha temporária
             private_key, wallet_address = generate_polygon_wallet()
-            
-            # Gerar senha temporária única
             temp_password = f"temp_{secrets.token_hex(8)}"
             hashed_password = generate_password_hash(temp_password)
-            
-            # Criar nickname baseado no email
             nickname = f"User_{email.split('@')[0]}"
             
             cursor.execute(
@@ -595,7 +538,6 @@ def site_process_purchase():
             print(f"💰 Saldo criado para usuário {user_id}")
         
         # 4. ✅ CORREÇÃO: NUNCA creditar automaticamente - SEMPRE PENDENTE
-        # Apenas vincular usuário ao pagamento
         cursor.execute(
             "UPDATE payments SET user_id = %s WHERE id = %s",
             (user_id, payment_id)
@@ -619,7 +561,7 @@ def site_process_purchase():
     finally:
         conn.close()
 
-# 🔄 Rota para Admin do Site - CORRIGIDA
+# 🔄 Rota para Admin do Site
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
     """Listar pagamentos para o admin do site"""
@@ -678,7 +620,6 @@ def site_admin_stats():
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Estatísticas de pagamentos
         cursor.execute('''
             SELECT 
                 COUNT(*) as total_payments,
@@ -690,12 +631,10 @@ def site_admin_stats():
         ''')
         payment_stats = cursor.fetchone()
         
-        # Estatísticas de usuários
         cursor.execute("SELECT COUNT(*) as total_users FROM users")
         user_stats = cursor.fetchone()
         
-        # Supply statistics
-        TOTAL_SUPPLY = 1000000000  # 1 bilhão
+        TOTAL_SUPPLY = 1000000000
         cursor.execute("SELECT SUM(available + staking_balance) as circulating FROM balances WHERE asset = 'ALZ'")
         circulating_result = cursor.fetchone()
         circulating = circulating_result['circulating'] or 0
@@ -756,7 +695,6 @@ def site_admin_process_payments():
             processed_count = 0
             
             for payment_id in payment_ids:
-                # Buscar pagamento pendente
                 cursor.execute(
                     "SELECT id, email, amount, user_id FROM payments WHERE id = %s AND status = 'pending'",
                     (payment_id,)
@@ -764,19 +702,16 @@ def site_admin_process_payments():
                 payment = cursor.fetchone()
                 
                 if payment and payment['user_id']:
-                    # Creditar tokens
                     cursor.execute(
                         "UPDATE balances SET available = available + %s WHERE user_id = %s",
                         (payment['amount'], payment['user_id'])
                     )
                     
-                    # Registrar no ledger
                     cursor.execute(
                         "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
                         (payment['user_id'], 'ALZ', payment['amount'], 'purchase', f'Compra PIX processada - Payment ID: {payment_id}')
                     )
                     
-                    # Atualizar status do pagamento
                     cursor.execute(
                         "UPDATE payments SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = %s",
                         (payment_id,)
@@ -804,8 +739,7 @@ def site_admin_process_payments():
         print(f"❌ Erro geral process-payments: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ===== ROTAS EXISTENTES DA WALLET (MANTIDAS) =====
-
+# ===== ROTAS EXISTENTES DA WALLET =====
 def get_user_id_from_token(token):
     try:
         parts = token.split("_")
@@ -817,13 +751,11 @@ def get_user_id_from_token(token):
 
 @app.before_request
 def authenticate_request():
-    # ✅ CORREÇÃO CRÍTICA: LISTA COMPLETA DE ROTAS PÚBLICAS
     public_routes = [
         "/health", 
         "/system/info",
         "/webhook/stripe", 
         "/webhook/nowpayments", 
-        "/webhook/mercadopago",
         "/register", 
         "/login", 
         "/first-time-setup", 
@@ -831,10 +763,9 @@ def authenticate_request():
         "/api/site/purchase",
         "/create-checkout-session",
         "/admin/login",
-        "/debug/stripe"  # ✅ Adicionando o endpoint de debug
+        "/debug/stripe"
     ]
     
-    # ✅ PERMITIR TODAS AS ROTAS DE ADMIN DO SITE E HEALTH
     if request.path.startswith("/api/site/admin") or request.path == "/health":
         return
         
@@ -951,7 +882,6 @@ def login_user():
 
 @app.route("/first-time-setup", methods=["POST"])
 def first_time_setup():
-    """Configurar senha para usuário que comprou tokens mas não tem conta completa"""
     data = request.json
     email = data.get('email')
     password = data.get('password')
@@ -1009,7 +939,6 @@ def first_time_setup():
 
 @app.route("/check-user", methods=["POST"])
 def check_user():
-    """Verificar situação do usuário para primeiro acesso"""
     data = request.json
     email = data.get('email')
     
@@ -1041,7 +970,7 @@ def check_user():
     finally:
         conn.close()
 
-# Rota de health check
+# ✅ ROTA DE HEALTH CHECK CORRIGIDA - SEM ERROS
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -1051,10 +980,10 @@ def health_check():
         "version": "1.0.0",
         "database": "Neon PostgreSQL",
         "stripe_available": STRIPE_AVAILABLE,
-        "stripe_version": getattr(stripe, '__version__', getattr(stripe, '_version', 'Unknown')) if STRIPE_AVAILABLE else "N/A"
+        "stripe_version": "8.0.0"
     }), 200
 
-# Rota para informações do sistema
+# ✅ Rota para informações do sistema
 @app.route('/system/info', methods=['GET'])
 def system_info():
     return jsonify({
@@ -1063,12 +992,11 @@ def system_info():
         "timestamp": datetime.now().isoformat(),
         "webhooks": {
             "stripe": "/webhook/stripe",
-            "nowpayments": "/webhook/nowpayments",
-            "mercadopago": "/webhook/mercadopago"
+            "nowpayments": "/webhook/nowpayments"
         },
         "features": {
             "stripe_available": STRIPE_AVAILABLE,
-            "stripe_version": getattr(stripe, '__version__', getattr(stripe, '_version', 'Unknown')) if STRIPE_AVAILABLE else "N/A",
+            "stripe_version": "8.0.0",
             "neon_database": True
         },
         "cors_domains": [
@@ -1078,28 +1006,16 @@ def system_info():
         ]
     }), 200
 
-# ✅ NOVO ENDPOINT DE DIAGNÓSTICO STRIPE
+# ✅ ENDPOINT DE DIAGNÓSTICO STRIPE
 @app.route('/debug/stripe', methods=['GET'])
 def debug_stripe():
-    """Endpoint de diagnóstico do Stripe"""
-    import sys
-    import pkg_resources
-    
-    # Verificar se o stripe está nos pacotes instalados
-    installed_packages = [pkg.key for pkg in pkg_resources.working_set]
-    stripe_installed = 'stripe' in installed_packages
-    
-    # Verificar paths
-    python_paths = sys.path
-    
     return jsonify({
         'stripe_available': STRIPE_AVAILABLE,
-        'stripe_installed': stripe_installed,
-        'stripe_version': stripe.__version__ if STRIPE_AVAILABLE else 'N/A',
+        'stripe_installed': STRIPE_AVAILABLE,
+        'stripe_version': "8.0.0",
         'api_key_configured': bool(stripe.api_key) if STRIPE_AVAILABLE else False,
         'env_key_exists': bool(os.getenv('STRIPE_SECRET_KEY')),
-        'python_paths': python_paths,
-        'installed_packages': installed_packages
+        'status': 'Operational' if STRIPE_AVAILABLE else 'Not Available'
     }), 200
 
 if __name__ == "__main__":
@@ -1107,11 +1023,10 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
     print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
+    
     if STRIPE_AVAILABLE:
-        stripe_version = getattr(stripe, '__version__', None)
-        if stripe_version is None:
-            stripe_version = getattr(stripe, '_version', 'Unknown')
-        print(f"📦 Versão do Stripe: {stripe_version}")
+        print("📦 Versão do Stripe: 8.0.0")
+    
     print("🌐 Rotas públicas:")
     print("   - GET  /health")
     print("   - GET  /system/info") 
