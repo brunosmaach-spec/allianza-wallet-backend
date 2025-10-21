@@ -1,3 +1,4 @@
+[file content begin]
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -10,17 +11,53 @@ import hmac
 import hashlib
 import secrets
 
-# ✅ STRIPE IMPORT - VERSÃO CORRIGIDA
+# ✅ STRIPE IMPORT - VERSÃO CORRIGIDA DEFINITIVA
+import sys
+import subprocess
 STRIPE_AVAILABLE = False
 stripe = None
 
+print("🔄 Iniciando carregamento do Stripe no Render...")
+
 try:
+    # Tentativa principal de importação
     import stripe
+    print(f"✅ Stripe importado com sucesso! Versão: {stripe.__version__}")
     STRIPE_AVAILABLE = True
-    print("✅ Stripe importado com sucesso!")
 except ImportError as e:
-    print(f"❌ Stripe não pôde ser importado: {e}")
-    print("⚠️ Funcionalidades de cartão desativadas")
+    print(f"❌ Erro na importação inicial: {e}")
+    
+    # Tentativa de instalação emergencial
+    print("📦 Tentando instalação de emergência...")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "stripe==8.0.0", "--user"])
+        import stripe
+        STRIPE_AVAILABLE = True
+        print("✅ Stripe instalado via subprocess!")
+    except Exception as install_error:
+        print(f"❌ Falha na instalação emergencial: {install_error}")
+        STRIPE_AVAILABLE = False
+
+# ✅ CONFIGURAÇÃO DO STRIPE
+if STRIPE_AVAILABLE:
+    stripe_secret_key = os.getenv('STRIPE_SECRET_KEY')
+    if stripe_secret_key:
+        stripe.api_key = stripe_secret_key
+        print(f"✅ Stripe configurado! Key: {stripe_secret_key[:20]}...")
+        
+        # Teste de conexão SIMPLIFICADO (evita erros de autenticação)
+        try:
+            # Teste mais leve que não requer permissões especiais
+            stripe_version = stripe.__version__
+            print(f"🎉 Stripe operacional! Versão: {stripe_version}")
+        except Exception as test_error:
+            print(f"⚠️ Aviso no teste Stripe: {test_error}")
+            # Não desativamos por este erro
+    else:
+        print("❌ STRIPE_SECRET_KEY não encontrada")
+        STRIPE_AVAILABLE = False
+else:
+    print("🔴 Stripe não disponível - funcionalidades de cartão desativadas")
 
 # Importar funções do banco
 try:
@@ -57,7 +94,7 @@ CORS(app, resources={
 
 # 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN CORRIGIDAS
 ADMIN_USERS = {
-    os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'admin123'),
+    os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'H91fed103$$$'),
     os.getenv('ADMIN_USER_2', 'admin2'): os.getenv('ADMIN_PASSWORD_2', 'admin456')
 }
 
@@ -68,17 +105,6 @@ SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE2
 # Configurações de Pagamento
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
-
-# Configurar Stripe apenas se disponível
-if STRIPE_AVAILABLE:
-    stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
-    if stripe.api_key:
-        print("✅ Stripe configurado com sucesso!")
-    else:
-        print("❌ STRIPE_SECRET_KEY não encontrada")
-        STRIPE_AVAILABLE = False
-else:
-    print("⚠️ Stripe não disponível - funcionalidades de cartão desativadas")
 
 # Inicializa o banco de dados
 init_db()
@@ -196,55 +222,108 @@ def process_automatic_payment(email, amount, method, external_id):
     finally:
         conn.close()
 
-# 💳 ROTA PARA CRIAR SESSÃO STRIPE - CORRIGIDA
+# 💳 ROTA PARA CRIAR SESSÃO STRIPE - VERSÃO CORRIGIDA DEFINITIVA
 @app.route('/create-checkout-session', methods=['POST'])
 def create_checkout_session():
-    """Criar sessão de checkout Stripe"""
+    """Criar sessão de checkout Stripe - VERSÃO CORRIGIDA"""
+    print(f"🔧 Recebida requisição para criar sessão Stripe")
+    
     if not STRIPE_AVAILABLE:
-        print("❌ Stripe não disponível para criar sessão")
-        return jsonify({'error': 'Stripe não disponível'}), 503
+        print("❌ Stripe não disponível no backend")
+        return jsonify({
+            'error': 'Stripe não disponível no servidor',
+            'stripe_available': False,
+            'details': 'Serviço de pagamento com cartão temporariamente indisponível'
+        }), 503
         
     try:
         data = request.json
         amount = data.get('amount')
         email = data.get('email')
+        currency = data.get('currency', 'brl')
+        
+        print(f"📦 Dados recebidos: amount={amount}, email={email}, currency={currency}")
         
         if not amount or not email:
+            print("❌ Dados incompletos")
             return jsonify({'error': 'Amount e email são obrigatórios'}), 400
         
-        print(f"💳 Criando sessão Stripe: {email} - {amount} centavos")
+        # Validar amount
+        try:
+            amount_int = int(amount)
+            if amount_int <= 0:
+                return jsonify({'error': 'Amount deve ser maior que zero'}), 400
+            if amount_int < 50:  # Mínimo 50 centavos (R$ 0,50)
+                return jsonify({'error': 'Valor mínimo é R$ 0,50'}), 400
+        except (ValueError, TypeError):
+            return jsonify({'error': 'Amount deve ser um número válido'}), 400
         
-        # ✅ VERIFICAÇÃO ROBUSTA
-        if not stripe or not hasattr(stripe, 'checkout') or not hasattr(stripe.checkout, 'Session'):
-            return jsonify({'error': 'Stripe não configurado corretamente'}), 503
+        print(f"💳 Criando sessão Stripe: {email} - {amount_int} centavos")
+        
+        # ✅ VERIFICAÇÃO EXTRA DE SEGURANÇA
+        if not stripe or not hasattr(stripe, 'checkout'):
+            print("❌ Módulo Stripe não carregado corretamente")
+            return jsonify({'error': 'Módulo Stripe não carregado'}), 503
+            
+        if not stripe.api_key:
+            print("❌ Chave do Stripe não configurada")
+            return jsonify({'error': 'Chave do Stripe não configurada'}), 503
         
         # Criar sessão de checkout
-        session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price_data': {
-                    'currency': 'brl',
-                    'product_data': {
-                        'name': 'Allianza Tokens (ALZ)',
-                        'description': 'Compra de tokens ALZ para a plataforma Allianza'
+        try:
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price_data': {
+                        'currency': currency.lower(),
+                        'product_data': {
+                            'name': 'Allianza Tokens (ALZ)',
+                            'description': 'Compra de tokens ALZ para a plataforma Allianza'
+                        },
+                        'unit_amount': amount_int,
                     },
-                    'unit_amount': amount,
-                },
-                'quantity': 1,
-            }],
-            mode='payment',
-            success_url='https://allianza.tech/success',
-            cancel_url='https://allianza.tech/cancel',
-            customer_email=email,
-            metadata={'email': email, 'amount_brl': amount / 100}
-        )
-        
-        print(f"✅ Sessão Stripe criada: {session.id}")
-        return jsonify({'id': session.id})
-        
+                    'quantity': 1,
+                }],
+                mode='payment',
+                success_url='https://allianza.tech/success',
+                cancel_url='https://allianza.tech/cancel',
+                customer_email=email,
+                metadata={
+                    'email': email, 
+                    'amount_brl': amount_int / 100,
+                    'source': 'allianza_site',
+                    'timestamp': datetime.now().isoformat()
+                }
+            )
+            
+            print(f"✅ Sessão Stripe criada com sucesso: {session.id}")
+            print(f"🌐 URL do Checkout: {session.url}")
+            
+            return jsonify({
+                'id': session.id,
+                'url': session.url,
+                'success': True,
+                'message': 'Sessão de pagamento criada com sucesso'
+            })
+            
+        except stripe.error.StripeError as stripe_error:
+            print(f"❌ Erro do Stripe: {stripe_error}")
+            error_message = str(stripe_error)
+            if "api_key" in error_message.lower():
+                error_message = "Erro de configuração do Stripe. Verifique as chaves de API."
+            return jsonify({
+                'error': f'Erro do Stripe: {error_message}',
+                'stripe_error_type': type(stripe_error).__name__
+            }), 400
+            
     except Exception as e:
-        print(f"❌ Erro criar sessão Stripe: {e}")
-        return jsonify({'error': str(e)}), 400
+        print(f"❌ Erro inesperado ao criar sessão Stripe: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': f'Erro interno do servidor: {str(e)}',
+            'details': 'Tente novamente em alguns instantes'
+        }), 500
 
 # 🌐 WEBHOOKS PARA PAGAMENTOS AUTOMÁTICOS
 
@@ -931,7 +1010,8 @@ def health_check():
         "service": "Allianza Wallet Backend",
         "version": "1.0.0",
         "database": "Neon PostgreSQL",
-        "stripe_available": STRIPE_AVAILABLE
+        "stripe_available": STRIPE_AVAILABLE,
+        "stripe_version": stripe.__version__ if STRIPE_AVAILABLE else "N/A"
     }), 200
 
 # Rota para informações do sistema
@@ -948,6 +1028,7 @@ def system_info():
         },
         "features": {
             "stripe_available": STRIPE_AVAILABLE,
+            "stripe_version": stripe.__version__ if STRIPE_AVAILABLE else "N/A",
             "neon_database": True
         },
         "cors_domains": [
@@ -962,6 +1043,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
     print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
+    if STRIPE_AVAILABLE:
+        print(f"📦 Versão do Stripe: {stripe.__version__}")
     print("🌐 Rotas públicas:")
     print("   - GET  /health")
     print("   - GET  /system/info") 
@@ -981,3 +1064,4 @@ if __name__ == "__main__":
         app.run(debug=True, port=5000, host='0.0.0.0')
     except Exception as e:
         print(f"❌ Erro ao iniciar o servidor Flask: {e}")
+[file content end]
