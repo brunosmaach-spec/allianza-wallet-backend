@@ -1,3 +1,4 @@
+# backend_wallet_integration.py
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -259,6 +260,130 @@ def process_automatic_payment(email, amount, method, external_id):
         raise
     finally:
         conn.close()
+
+# 🔄 ROTA PARA ENVIO MANUAL DE TOKENS (ADMIN)
+@app.route('/api/site/admin/manual-token-send', methods=['POST'])
+def site_admin_manual_token_send():
+    """Enviar tokens manualmente para qualquer email"""
+    try:
+        auth_header = request.headers.get('Authorization', '')
+        
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Token não fornecido"}), 401
+        
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        expected_token = SITE_ADMIN_TOKEN
+        
+        if not admin_token or admin_token != expected_token:
+            return jsonify({"error": "Token inválido"}), 401
+        
+        data = request.json
+        email = data.get('email')
+        amount = data.get('amount')
+        description = data.get('description', 'Crédito administrativo manual')
+        admin_user = data.get('admin_user', 'admin')
+        
+        if not email or not amount:
+            return jsonify({"error": "Email e valor são obrigatórios"}), 400
+        
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return jsonify({"error": "Valor deve ser positivo"}), 400
+        except ValueError:
+            return jsonify({"error": "Valor inválido"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            
+            print(f"🔄 Processando envio manual: {email} - {amount} ALZ")
+            
+            # Verificar se o usuário existe
+            cursor.execute('SELECT id, email FROM users WHERE email = %s', (email,))
+            user = cursor.fetchone()
+            
+            if not user:
+                # Se o usuário não existe, criar um registro pendente na tabela payments
+                cursor.execute('''
+                    INSERT INTO payments (email, amount, method, status, description, metadata)
+                    VALUES (%s, %s, 'manual', 'pending', %s, %s)
+                    RETURNING id
+                ''', (email, amount, description, {'admin_user': admin_user, 'type': 'manual_credit'}))
+                
+                payment_id = cursor.fetchone()['id']
+                
+                # Registrar log administrativo
+                cursor.execute('''
+                    INSERT INTO admin_logs (admin_user, action, description, target_id)
+                    VALUES (%s, %s, %s, %s)
+                ''', (admin_user, 'manual_token_send_pending', 
+                      f'Crédito manual de {amount} ALZ para {email} (usuário não cadastrado)', 
+                      payment_id))
+                
+                conn.commit()
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'Crédito de {amount} ALZ aguardando cadastro do usuário {email}',
+                    'payment_id': payment_id,
+                    'user_status': 'pending_registration'
+                })
+            
+            # Se o usuário existe, creditar diretamente
+            user_id = user['id']
+            
+            # Atualizar saldo
+            cursor.execute('''
+                INSERT INTO balances (user_id, available, asset)
+                VALUES (%s, %s, 'ALZ')
+                ON CONFLICT (user_id) 
+                DO UPDATE SET 
+                    available = balances.available + EXCLUDED.available,
+                    updated_at = CURRENT_TIMESTAMP
+                RETURNING available
+            ''', (user_id, amount))
+            
+            new_balance = cursor.fetchone()['available']
+            
+            # Registrar no ledger
+            cursor.execute('''
+                INSERT INTO ledger_entries 
+                (user_id, asset, amount, entry_type, description, idempotency_key)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (user_id, 'ALZ', amount, 'admin_credit', 
+                  f'Crédito administrativo: {description}',
+                  f'manual_credit_{user_id}_{int(datetime.utcnow().timestamp())}'))
+            
+            # Registrar log administrativo
+            cursor.execute('''
+                INSERT INTO admin_logs (admin_user, action, description, target_id)
+                VALUES (%s, %s, %s, %s)
+            ''', (admin_user, 'manual_token_send', 
+                  f'Crédito manual de {amount} ALZ para {email}', 
+                  user_id))
+            
+            conn.commit()
+            
+            return jsonify({
+                'success': True,
+                'message': f'Crédito de {amount} ALZ enviado com sucesso para {email}',
+                'new_balance': float(new_balance),
+                'user_status': 'existing_user'
+            })
+            
+        except Exception as e:
+            conn.rollback()
+            print(f'❌ Erro no envio manual de tokens: {e}')
+            return jsonify({'success': False, 'error': str(e)}), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f'❌ Erro geral manual-token-send: {e}')
+        return jsonify({'error': str(e)}), 500
 
 # 💳 ROTA PARA CRIAR SESSÃO STRIPE - VERSÃO CORRIGIDA DEFINITIVA
 @app.route('/create-checkout-session', methods=['POST'])
@@ -1139,6 +1264,7 @@ if __name__ == "__main__":
     print("   - POST /register, /login, /first-time-setup, /check-user")
     print("   - POST /create-checkout-session")
     print("   - GET  /debug/stripe")
+    print("   - POST /api/site/admin/manual-token-send")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
