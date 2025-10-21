@@ -10,14 +10,17 @@ import hmac
 import hashlib
 import secrets
 
-# Tentar importar stripe (opcional)
+# ✅ STRIPE IMPORT - VERSÃO CORRIGIDA
+STRIPE_AVAILABLE = False
+stripe = None
+
 try:
     import stripe
     STRIPE_AVAILABLE = True
-    print("✅ Stripe disponível")
-except ImportError:
-    STRIPE_AVAILABLE = False
-    print("⚠️ Stripe não disponível - funcionalidades de cartão limitadas")
+    print("✅ Stripe importado com sucesso!")
+except ImportError as e:
+    print(f"❌ Stripe não pôde ser importado: {e}")
+    print("⚠️ Funcionalidades de cartão desativadas")
 
 # Importar funções do banco
 try:
@@ -59,7 +62,7 @@ ADMIN_USERS = {
 }
 
 # ✅ TOKEN CORRETO - IGUAL AO FRONTEND
-ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza')
+ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'CdE25$$$')
 SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
 
 # Configurações de Pagamento
@@ -68,9 +71,14 @@ NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4f
 
 # Configurar Stripe apenas se disponível
 if STRIPE_AVAILABLE:
-    stripe.api_key = os.getenv('STRIPE_SECRET_KEY', 'sk_test_your_secret_key_here')
+    stripe.api_key = os.getenv('STRIPE_SECRET_KEY')
+    if stripe.api_key:
+        print("✅ Stripe configurado com sucesso!")
+    else:
+        print("❌ STRIPE_SECRET_KEY não encontrada")
+        STRIPE_AVAILABLE = False
 else:
-    print("⚠️ Stripe não configurado - funcionalidades de cartão desativadas")
+    print("⚠️ Stripe não disponível - funcionalidades de cartão desativadas")
 
 # Inicializa o banco de dados
 init_db()
@@ -188,11 +196,12 @@ def process_automatic_payment(email, amount, method, external_id):
     finally:
         conn.close()
 
-# 💳 ROTA PARA CRIAR SESSÃO STRIPE (ADICIONADA)
+# 💳 ROTA PARA CRIAR SESSÃO STRIPE - CORRIGIDA
 @app.route('/create-checkout-session', methods=['POST'])
 def create_checkout_session():
     """Criar sessão de checkout Stripe"""
     if not STRIPE_AVAILABLE:
+        print("❌ Stripe não disponível para criar sessão")
         return jsonify({'error': 'Stripe não disponível'}), 503
         
     try:
@@ -204,6 +213,10 @@ def create_checkout_session():
             return jsonify({'error': 'Amount e email são obrigatórios'}), 400
         
         print(f"💳 Criando sessão Stripe: {email} - {amount} centavos")
+        
+        # ✅ VERIFICAÇÃO ROBUSTA
+        if not stripe or not hasattr(stripe, 'checkout') or not hasattr(stripe.checkout, 'Session'):
+            return jsonify({'error': 'Stripe não configurado corretamente'}), 503
         
         # Criar sessão de checkout
         session = stripe.checkout.Session.create(
@@ -398,7 +411,7 @@ def admin_login():
     
     return jsonify({"error": "Credenciais inválidas"}), 401
 
-# 🔄 Rota para o Site processar pagamentos - CORRIGIDA (SEM CRÉDITO AUTOMÁTICO PIX)
+# 🔄 Rota para o Site processar pagamentos - CORRIGIDA (SEM CRÉDITO AUTOMÁTICO)
 @app.route('/api/site/purchase', methods=['POST'])
 def site_process_purchase():
     """Processar compra do site - TODOS OS PAGAMENTOS FICAM PENDENTES"""
@@ -488,36 +501,21 @@ def site_process_purchase():
     finally:
         conn.close()
 
-# 🔄 Rota para Admin do Site - CORRIGIDA COM DEBUG
+# 🔄 Rota para Admin do Site - CORRIGIDA
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
     """Listar pagamentos para o admin do site"""
     try:
         auth_header = request.headers.get('Authorization', '')
-        print(f"🔐 DEBUG - Headers recebidos: {dict(request.headers)}")
-        print(f"🔐 DEBUG - Authorization header: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
-            print("❌ DEBUG - Token não fornecido ou formato inválido")
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
-        
-        # 🔥 CORREÇÃO: Usar valor direto para garantir que funciona
-        expected_token = 'allianza_super_admin_2024_CdE25$$$'
-        # expected_token = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
-        
-        print(f"🔐 DEBUG - Token recebido: '{admin_token}'")
-        print(f"🔐 DEBUG - Token esperado: '{expected_token}'")
-        print(f"🔐 DEBUG - Tokens iguais? {admin_token == expected_token}")
-        print(f"🔐 DEBUG - Comprimento token recebido: {len(admin_token)}")
-        print(f"🔐 DEBUG - Comprimento token esperado: {len(expected_token)}")
+        expected_token = SITE_ADMIN_TOKEN
         
         if not admin_token or admin_token != expected_token:
-            print("❌ DEBUG - Token inválido")
             return jsonify({"error": "Token inválido"}), 401
-        
-        print("✅ DEBUG - Token válido, processando requisição...")
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -531,41 +529,33 @@ def site_admin_payments():
         ''')
         payments = cursor.fetchall()
         
-        print(f"✅ DEBUG - Retornando {len(payments)} pagamentos")
         return jsonify({
             "success": True,
             "data": [dict(payment) for payment in payments]
         }), 200
         
     except Exception as e:
-        print(f"❌ DEBUG - Erro: {e}")
+        print(f"❌ Erro: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if 'conn' in locals():
             conn.close()
 
-# 🔄 Rota para estatísticas do admin do site - CORRIGIDA
+# 🔄 Rota para estatísticas do admin do site
 @app.route('/api/site/admin/stats', methods=['GET'])
 def site_admin_stats():
     """Estatísticas para o admin do site"""
     try:
         auth_header = request.headers.get('Authorization', '')
-        print(f"📊 DEBUG - Validando token para stats...")
         
         if not auth_header.startswith('Bearer '):
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
-        
-        # 🔥 CORREÇÃO: Usar valor direto
-        expected_token = 'allianza_super_admin_2024_CdE25$$$'
-        # expected_token = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+        expected_token = SITE_ADMIN_TOKEN
         
         if not admin_token or admin_token != expected_token:
-            print(f"❌ DEBUG - Token stats inválido: '{admin_token}' vs '{expected_token}'")
             return jsonify({"error": "Token inválido"}), 401
-        
-        print("✅ DEBUG - Token stats válido")
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -611,34 +601,27 @@ def site_admin_stats():
         }), 200
         
     except Exception as e:
-        print(f"❌ DEBUG - Erro stats: {e}")
+        print(f"❌ Erro stats: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if 'conn' in locals():
             conn.close()
 
-# 🔄 Processar Pagamentos PIX Manualmente (Admin) - CORRIGIDA
+# 🔄 Processar Pagamentos PIX Manualmente (Admin)
 @app.route('/api/site/admin/process-payments', methods=['POST'])
 def site_admin_process_payments():
     """Processar pagamentos PIX manualmente"""
     try:
         auth_header = request.headers.get('Authorization', '')
-        print(f"💰 DEBUG - Validando token para process-payments...")
         
         if not auth_header.startswith('Bearer '):
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
-        
-        # 🔥 CORREÇÃO: Usar valor direto
-        expected_token = 'allianza_super_admin_2024_CdE25$$$'
-        # expected_token = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+        expected_token = SITE_ADMIN_TOKEN
         
         if not admin_token or admin_token != expected_token:
-            print(f"❌ DEBUG - Token process-payments inválido")
             return jsonify({"error": "Token inválido"}), 401
-        
-        print("✅ DEBUG - Token process-payments válido")
         
         data = request.json
         payment_ids = data.get('payment_ids', [])
@@ -694,13 +677,13 @@ def site_admin_process_payments():
             
         except Exception as e:
             conn.rollback()
-            print(f"❌ DEBUG - Erro process-payments: {e}")
+            print(f"❌ Erro process-payments: {e}")
             return jsonify({"error": str(e)}), 500
         finally:
             conn.close()
             
     except Exception as e:
-        print(f"❌ DEBUG - Erro geral process-payments: {e}")
+        print(f"❌ Erro geral process-payments: {e}")
         return jsonify({"error": str(e)}), 500
 
 # ===== ROTAS EXISTENTES DA WALLET (MANTIDAS) =====
@@ -947,7 +930,8 @@ def health_check():
         "timestamp": datetime.now().isoformat(),
         "service": "Allianza Wallet Backend",
         "version": "1.0.0",
-        "database": "Neon PostgreSQL"
+        "database": "Neon PostgreSQL",
+        "stripe_available": STRIPE_AVAILABLE
     }), 200
 
 # Rota para informações do sistema
@@ -977,6 +961,7 @@ if __name__ == "__main__":
     print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND")
     print("=" * 60)
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
+    print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
     print("🌐 Rotas públicas:")
     print("   - GET  /health")
     print("   - GET  /system/info") 
