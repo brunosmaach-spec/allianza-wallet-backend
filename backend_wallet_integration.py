@@ -1,4 +1,4 @@
-# backend_wallet_integration.py
+# backend_wallet_integration.py - PRODUÇÃO
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,39 +11,27 @@ import hmac
 import hashlib
 import secrets
 
-# ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO - CRÍTICO!
+# ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO
 from dotenv import load_dotenv
 load_dotenv()
 
 print("=" * 60)
-print("🔧 DEBUG - VARIÁVEIS DE AMBIENTE")
+print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
 print("=" * 60)
-print(f"SITE_ADMIN_TOKEN: {os.getenv('SITE_ADMIN_TOKEN', 'NÃO ENCONTRADO')}")
-print(f"STRIPE_SECRET_KEY: {'✅ ENCONTRADO' if os.getenv('STRIPE_SECRET_KEY') else '❌ NÃO ENCONTRADO'}")
-print(f"NEON_DATABASE_URL: {'✅ ENCONTRADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
+print(f"🔑 SITE_ADMIN_TOKEN: {os.getenv('SITE_ADMIN_TOKEN', 'NÃO ENCONTRADO')}")
+print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
+print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
 print("=" * 60)
-
-print("🔍 Verificando variáveis de ambiente:")
-print(f"   STRIPE_SECRET_KEY: {'✅' if os.getenv('STRIPE_SECRET_KEY') else '❌'}")
-print(f"   NEON_DATABASE_URL: {'✅' if os.getenv('NEON_DATABASE_URL') else '❌'}")
-print(f"   SITE_ADMIN_TOKEN: {'✅' if os.getenv('SITE_ADMIN_TOKEN') else '❌'}")
 
 # ✅ INSTALAÇÃO FORÇADA DO STRIPE
 import sys
 import subprocess
-
-print("=" * 60)
-print("🚀 INICIANDO CARREGAMENTO STRIPE")
-print("=" * 60)
 
 STRIPE_AVAILABLE = False
 stripe = None
 
 # ✅ VERIFICAR VARIÁVEIS PRIMEIRO
 stripe_secret_key = os.getenv('STRIPE_SECRET_KEY')
-print(f"🔍 Variável STRIPE_SECRET_KEY: {'✅ ENCONTRADA' if stripe_secret_key else '❌ NÃO ENCONTRADA'}")
-if stripe_secret_key:
-    print(f"   Chave: {stripe_secret_key[:20]}...")
 
 # ✅ ESTRATÉGIA 1: Importação normal
 try:
@@ -70,24 +58,24 @@ if not STRIPE_AVAILABLE:
     except Exception as e:
         print(f"❌ Falha instalação forçada: {e}")
 
-# ✅ CONFIGURAÇÃO FINAL CORRIGIDA
+# ✅ CONFIGURAÇÃO FINAL CORRIGIDA - PRODUÇÃO
 if STRIPE_AVAILABLE:
     try:
         if stripe_secret_key:
             stripe.api_key = stripe_secret_key
-            print("✅ Stripe configurado com sucesso!")
-            print("🎉 STRIPE OPERACIONAL! Versão: 8.0.0")
+            if stripe_secret_key.startswith('sk_live_'):
+                print("🎉 STRIPE EM MODO PRODUÇÃO! Pagamentos reais ativados!")
+            else:
+                print("🔧 STRIPE EM MODO TESTE")
+            print("📦 Versão Stripe: 8.0.0")
         else:
-            print("❌ STRIPE_SECRET_KEY não encontrada nas variáveis de ambiente")
+            print("❌ STRIPE_SECRET_KEY não encontrada")
             STRIPE_AVAILABLE = False
     except Exception as e:
         print(f"❌ Erro configuração Stripe: {e}")
         STRIPE_AVAILABLE = False
 else:
     print("🔴 STRIPE NÃO DISPONÍVEL - Pagamentos com cartão desativados")
-
-print(f"📊 STATUS FINAL STRIPE: {'✅ DISPONÍVEL' if STRIPE_AVAILABLE else '❌ INDISPONÍVEL'}")
-print("=" * 60)
 
 # Importar funções do banco
 try:
@@ -104,53 +92,34 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CONFIGURAÇÃO CORS SIMPLIFICADA - SEM DUPLICAÇÃO
+# ✅ CONFIGURAÇÃO CORS PARA PRODUÇÃO
 CORS(app, resources={
     r"/*": {
         "origins": [
-            "http://localhost:5173",        # Vite dev
-            "http://localhost:5174",        # Vite dev (nova porta)
-            "http://127.0.0.1:5173",        # Vite dev (IP local)
-            "http://127.0.0.1:5174",        # Vite dev (IP local)
-            "http://localhost:3000",        # Next.js dev
-            "http://127.0.0.1:3000",        # Next.js dev (IP local)
-            "https://allianza.tech",        # Site vitrine
-            "https://www.allianza.tech",    # Site vitrine (www)
-            "https://wallet.allianza.tech", # Wallet
-            "https://www.wallet.allianza.tech" # Wallet (www)
+            "https://allianza.tech",
+            "https://www.allianza.tech",
+            "https://wallet.allianza.tech",
+            "https://www.wallet.allianza.tech",
+            "http://localhost:5173",
+            "http://localhost:3000"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-        "allow_headers": [
-            "Content-Type", 
-            "Authorization", 
-            "X-Requested-With",
-            "X-Request-ID",
-            "Accept",
-            "Origin",
-            "Access-Control-Request-Method",
-            "Access-Control-Request-Headers"
-        ],
-        "expose_headers": [
-            "Content-Range",
-            "X-Content-Range",
-            "Content-Length",
-            "Content-Type"
-        ],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
         "supports_credentials": True,
         "max_age": 3600
     }
 })
 
-# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN
+# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO
 ADMIN_USERS = {
     os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'admin123'),
 }
 
-# ✅ TOKEN CORRETO - IGUAL AO FRONTEND
-ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza')
+# ✅ TOKEN CORRETO - PRODUÇÃO
+ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza-prod')
 SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
 
-# Configurações de Pagamento
+# Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
 
@@ -269,29 +238,74 @@ def process_automatic_payment(email, amount, method, external_id):
     finally:
         conn.close()
 
-# 🔄 ROTA PARA ENVIO MANUAL DE TOKENS (ADMIN)
+# ✅ ROTA DE DEBUG PARA VERIFICAR TOKEN
+@app.route('/api/site/admin/debug-token', methods=['GET'])
+def debug_token():
+    """Debug para verificar se o token está correto"""
+    auth_header = request.headers.get('Authorization', '')
+    
+    print("=" * 50)
+    print("🔐 DEBUG TOKEN - INÍCIO")
+    print(f"📨 Header Authorization: {auth_header}")
+    
+    if not auth_header.startswith('Bearer '):
+        return jsonify({
+            "error": "Header não começa com Bearer",
+            "header_received": auth_header
+        }), 401
+    
+    admin_token = auth_header.replace('Bearer ', '').strip()
+    expected_token = SITE_ADMIN_TOKEN
+    
+    print(f"🔑 Token recebido: '{admin_token}'")
+    print(f"🔑 Token esperado: '{expected_token}'")
+    print(f"📏 Comprimento recebido: {len(admin_token)}")
+    print(f"📏 Comprimento esperado: {len(expected_token)}")
+    print(f"✅ Tokens são iguais? {admin_token == expected_token}")
+    
+    # Verificação caractere por caractere
+    if len(admin_token) != len(expected_token):
+        print("❌ Comprimentos diferentes!")
+        for i in range(min(len(admin_token), len(expected_token))):
+            if admin_token[i] != expected_token[i]:
+                print(f"   Diferença na posição {i}: '{admin_token[i]}' vs '{expected_token[i]}'")
+                break
+    
+    print("🔐 DEBUG TOKEN - FIM")
+    print("=" * 50)
+    
+    if admin_token == expected_token:
+        return jsonify({
+            "success": True,
+            "message": "Token válido!",
+            "token_length": len(admin_token),
+            "token_match": True
+        }), 200
+    else:
+        return jsonify({
+            "error": "Token inválido",
+            "token_received": admin_token,
+            "token_expected": expected_token,
+            "token_length_received": len(admin_token),
+            "token_length_expected": len(expected_token),
+            "token_match": False
+        }), 401
+
+# 🔄 ROTA PARA ENVIO MANUAL DE TOKENS (ADMIN) - PRODUÇÃO
 @app.route('/api/site/admin/manual-token-send', methods=['POST'])
 def site_admin_manual_token_send():
-    """Enviar tokens manualmente para qualquer email"""
+    """Enviar tokens manualmente para qualquer email - PRODUÇÃO"""
     try:
         auth_header = request.headers.get('Authorization', '')
-        print(f"🔐 Header de autorização recebido: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
-            print("❌ Token não fornecido ou formato inválido")
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
         expected_token = SITE_ADMIN_TOKEN
         
-        print(f"🔑 Token recebido: {admin_token}")
-        print(f"🔑 Token esperado: {expected_token}")
-        
         if not admin_token or admin_token != expected_token:
-            print("❌ Token inválido")
             return jsonify({"error": "Token inválido"}), 401
-        
-        print("✅ Token válido, processando requisição...")
         
         data = request.json
         email = data.get('email')
@@ -322,7 +336,7 @@ def site_admin_manual_token_send():
             user = cursor.fetchone()
             
             if not user:
-                # Se o usuário não existe, criar um registro pendente na tabela payments
+                # Se o usuário não existe, criar um registro pendente
                 cursor.execute('''
                     INSERT INTO payments (email, amount, method, status, description, metadata)
                     VALUES (%s, %s, 'manual', 'pending', %s, %s)
@@ -401,18 +415,15 @@ def site_admin_manual_token_send():
         print(f'❌ Erro geral manual-token-send: {e}')
         return jsonify({'error': str(e)}), 500
 
-# 💳 ROTA PARA CRIAR SESSÃO STRIPE - VERSÃO CORRIGIDA DEFINITIVA
+# 💳 ROTA PARA CRIAR SESSÃO STRIPE - PRODUÇÃO
 @app.route('/create-checkout-session', methods=['POST'])
 def create_checkout_session():
-    """Criar sessão de checkout Stripe - VERSÃO CORRIGIDA"""
-    print(f"🔧 Recebida requisição para criar sessão Stripe")
+    """Criar sessão de checkout Stripe - PRODUÇÃO"""
     
     if not STRIPE_AVAILABLE:
-        print("❌ Stripe não disponível no backend")
         return jsonify({
             'error': 'Stripe não disponível no servidor',
-            'stripe_available': False,
-            'details': 'Serviço de pagamento com cartão temporariamente indisponível'
+            'stripe_available': False
         }), 503
         
     try:
@@ -421,10 +432,7 @@ def create_checkout_session():
         email = data.get('email')
         currency = data.get('currency', 'brl')
         
-        print(f"📦 Dados recebidos: amount={amount}, email={email}, currency={currency}")
-        
         if not amount or not email:
-            print("❌ Dados incompletos")
             return jsonify({'error': 'Amount e email são obrigatórios'}), 400
         
         # Validar amount
@@ -437,16 +445,9 @@ def create_checkout_session():
         except (ValueError, TypeError):
             return jsonify({'error': 'Amount deve ser um número válido'}), 400
         
-        print(f"💳 Criando sessão Stripe: {email} - {amount_int} centavos")
-        
-        # ✅ VERIFICAÇÃO EXTRA DE SEGURANÇA
-        if not stripe or not hasattr(stripe, 'checkout'):
-            print("❌ Módulo Stripe não carregado corretamente")
-            return jsonify({'error': 'Módulo Stripe não carregado'}), 503
-            
-        if not stripe.api_key:
-            print("❌ Chave do Stripe não configurada")
-            return jsonify({'error': 'Chave do Stripe não configurada'}), 503
+        # URLs para produção
+        success_url = 'https://allianza.tech/success'
+        cancel_url = 'https://allianza.tech/cancel'
         
         # Criar sessão de checkout
         try:
@@ -464,19 +465,15 @@ def create_checkout_session():
                     'quantity': 1,
                 }],
                 mode='payment',
-                success_url='https://allianza.tech/success',
-                cancel_url='https://allianza.tech/cancel',
+                success_url=success_url,
+                cancel_url=cancel_url,
                 customer_email=email,
                 metadata={
                     'email': email, 
                     'amount_brl': amount_int / 100,
-                    'source': 'allianza_site',
-                    'timestamp': datetime.now().isoformat()
+                    'source': 'allianza_site_production'
                 }
             )
-            
-            print(f"✅ Sessão Stripe criada com sucesso: {session.id}")
-            print(f"🌐 URL do Checkout: {session.url}")
             
             return jsonify({
                 'id': session.id,
@@ -486,28 +483,19 @@ def create_checkout_session():
             })
             
         except stripe.error.StripeError as stripe_error:
-            print(f"❌ Erro do Stripe: {stripe_error}")
-            error_message = str(stripe_error)
-            if "api_key" in error_message.lower():
-                error_message = "Erro de configuração do Stripe. Verifique as chaves de API."
             return jsonify({
-                'error': f'Erro do Stripe: {error_message}',
-                'stripe_error_type': type(stripe_error).__name__
+                'error': f'Erro do Stripe: {str(stripe_error)}'
             }), 400
             
     except Exception as e:
-        print(f"❌ Erro inesperado ao criar sessão Stripe: {e}")
-        import traceback
-        traceback.print_exc()
         return jsonify({
-            'error': f'Erro interno do servidor: {str(e)}',
-            'details': 'Tente novamente em alguns instantes'
+            'error': f'Erro interno do servidor: {str(e)}'
         }), 500
 
-# 🌐 WEBHOOKS PARA PAGAMENTOS AUTOMÁTICOS
+# 🌐 WEBHOOKS PARA PAGAMENTOS AUTOMÁTICOS - PRODUÇÃO
 @app.route('/webhook/stripe', methods=['POST'])
 def stripe_webhook():
-    """Webhook para pagamentos Stripe (Cartão)"""
+    """Webhook para pagamentos Stripe (Cartão) - PRODUÇÃO"""
     if not STRIPE_AVAILABLE:
         return jsonify({'error': 'Stripe não disponível'}), 503
         
@@ -515,7 +503,7 @@ def stripe_webhook():
         payload = request.get_data()
         sig_header = request.headers.get('Stripe-Signature')
         
-        print(f"📥 Webhook Stripe recebido: {request.headers}")
+        print(f"📥 Webhook Stripe PRODUÇÃO recebido: {request.headers}")
         
         # Verificar assinatura do webhook
         try:
@@ -529,7 +517,7 @@ def stripe_webhook():
             print(f"❌ Assinatura inválida: {e}")
             return jsonify({'error': 'Invalid signature'}), 401
         
-        print(f"📊 Evento Stripe: {event['type']}")
+        print(f"📊 Evento Stripe PRODUÇÃO: {event['type']}")
         
         if event['type'] == 'payment_intent.succeeded':
             payment_intent = event['data']['object']
@@ -541,7 +529,7 @@ def stripe_webhook():
                 result = process_automatic_payment(email, amount, 'credit_card', payment_id)
                 return jsonify(result), 200
             else:
-                print("⚠️ Email ou valor inválido no webhook Stripe")
+                print("⚠️ Email ou valor inválido no webhook Stripe PRODUÇÃO")
                 return jsonify({'error': 'Invalid email or amount'}), 400
                 
         elif event['type'] == 'charge.succeeded':
@@ -557,7 +545,7 @@ def stripe_webhook():
         return jsonify({'success': True, 'message': 'Event processed'}), 200
         
     except Exception as e:
-        print(f"❌ Erro webhook Stripe: {e}")
+        print(f"❌ Erro webhook Stripe PRODUÇÃO: {e}")
         return jsonify({'error': str(e)}), 400
 
 @app.route('/webhook/nowpayments', methods=['POST'])
@@ -612,7 +600,7 @@ def nowpayments_webhook():
         print(f"❌ Erro webhook NowPayments: {e}")
         return jsonify({'error': str(e)}), 400
 
-# 🔑 Login Admin
+# 🔑 Login Admin - PRODUÇÃO
 @app.route('/admin/login', methods=['POST'])
 def admin_login():
     data = request.json
@@ -637,10 +625,10 @@ def admin_login():
     
     return jsonify({"error": "Credenciais inválidas"}), 401
 
-# 🔄 Rota para o Site processar pagamentos
+# 🔄 Rota para o Site processar pagamentos - PRODUÇÃO
 @app.route('/api/site/purchase', methods=['POST'])
 def site_process_purchase():
-    """Processar compra do site - TODOS OS PAGAMENTOS FICAM PENDENTES"""
+    """Processar compra do site - PRODUÇÃO"""
     data = request.json
     email = data.get('email')
     amount = data.get('amount')
@@ -721,29 +709,42 @@ def site_process_purchase():
     finally:
         conn.close()
 
-# 🔄 Rota para Admin do Site
+# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
-    """Listar pagamentos para o admin do site"""
+    """Listar pagamentos para o admin do site - PRODUÇÃO"""
     try:
         auth_header = request.headers.get('Authorization', '')
-        print(f"🔐 Header de autorização recebido: {auth_header}")
+        
+        print("=" * 50)
+        print("🔐 ADMIN PAYMENTS - VERIFICAÇÃO DE TOKEN")
+        print(f"📨 Header: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
-            print("❌ Token não fornecido ou formato inválido")
+            print("❌ Header não começa com Bearer")
             return jsonify({"error": "Token não fornecido"}), 401
         
         admin_token = auth_header.replace('Bearer ', '').strip()
         expected_token = SITE_ADMIN_TOKEN
         
-        print(f"🔑 Token recebido: {admin_token}")
-        print(f"🔑 Token esperado: {expected_token}")
+        print(f"🔑 Token recebido: '{admin_token}'")
+        print(f"🔑 Token esperado: '{expected_token}'")
+        print(f"✅ São iguais? {admin_token == expected_token}")
         
-        if not admin_token or admin_token != expected_token:
-            print("❌ Token inválido")
+        if not admin_token:
+            print("❌ Token vazio")
+            return jsonify({"error": "Token vazio"}), 401
+            
+        if admin_token != expected_token:
+            print("❌ Tokens não coincidem!")
+            print(f"   Recebido: '{admin_token}'")
+            print(f"   Esperado: '{expected_token}'")
+            print(f"   Comprimento recebido: {len(admin_token)}")
+            print(f"   Comprimento esperado: {len(expected_token)}")
             return jsonify({"error": "Token inválido"}), 401
         
-        print("✅ Token válido, processando requisição...")
+        print("✅ Token válido! Processando requisição...")
+        print("=" * 50)
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -757,22 +758,24 @@ def site_admin_payments():
         ''')
         payments = cursor.fetchall()
         
+        print(f"✅ Retornando {len(payments)} pagamentos")
+        
         return jsonify({
             "success": True,
             "data": [dict(payment) for payment in payments]
         }), 200
         
     except Exception as e:
-        print(f"❌ Erro: {e}")
+        print(f"❌ Erro em admin/payments: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         if 'conn' in locals():
             conn.close()
 
-# 🔄 Rota para estatísticas do admin do site
+# 🔄 Rota para estatísticas do admin do site - PRODUÇÃO
 @app.route('/api/site/admin/stats', methods=['GET'])
 def site_admin_stats():
-    """Estatísticas para o admin do site"""
+    """Estatísticas para o admin do site - PRODUÇÃO"""
     try:
         auth_header = request.headers.get('Authorization', '')
         
@@ -832,10 +835,10 @@ def site_admin_stats():
         if 'conn' in locals():
             conn.close()
 
-# 🔄 Processar Pagamentos PIX Manualmente (Admin)
+# 🔄 Processar Pagamentos PIX Manualmente (Admin) - PRODUÇÃO
 @app.route('/api/site/admin/process-payments', methods=['POST'])
 def site_admin_process_payments():
-    """Processar pagamentos PIX manualmente"""
+    """Processar pagamentos PIX manualmente - PRODUÇÃO"""
     try:
         auth_header = request.headers.get('Authorization', '')
         
@@ -931,7 +934,8 @@ def authenticate_request():
         "/api/site/purchase",
         "/create-checkout-session",
         "/admin/login",
-        "/debug/stripe"
+        "/debug/stripe",
+        "/api/site/admin/debug-token"  # ✅ Adicionada rota de debug
     ]
     
     if request.path.startswith("/api/site/admin") or request.path == "/health":
@@ -1138,7 +1142,7 @@ def check_user():
     finally:
         conn.close()
 
-# ✅ ROTA DE HEALTH CHECK CORRIGIDA - SEM ERROS
+# ✅ ROTA DE HEALTH CHECK - PRODUÇÃO
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -1146,12 +1150,12 @@ def health_check():
         "timestamp": datetime.now().isoformat(),
         "service": "Allianza Wallet Backend",
         "version": "1.0.0",
-        "database": "Neon PostgreSQL",
+        "environment": "production",
         "stripe_available": STRIPE_AVAILABLE,
-        "stripe_version": "8.0.0"
+        "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test"
     }), 200
 
-# ✅ Rota para informações do sistema
+# ✅ Rota para informações do sistema - PRODUÇÃO
 @app.route('/system/info', methods=['GET'])
 def system_info():
     return jsonify({
@@ -1165,6 +1169,7 @@ def system_info():
         "features": {
             "stripe_available": STRIPE_AVAILABLE,
             "stripe_version": "8.0.0",
+            "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
             "neon_database": True
         },
         "cors_domains": [
@@ -1177,14 +1182,16 @@ def system_info():
         ]
     }), 200
 
-# ✅ ENDPOINT DE DIAGNÓSTICO STRIPE
+# ✅ ENDPOINT DE DIAGNÓSTICO STRIPE - PRODUÇÃO
 @app.route('/debug/stripe', methods=['GET'])
 def debug_stripe():
+    is_production = stripe and stripe.api_key and stripe.api_key.startswith('sk_live_')
     return jsonify({
         'stripe_available': STRIPE_AVAILABLE,
         'stripe_installed': STRIPE_AVAILABLE,
         'stripe_version': "8.0.0",
         'api_key_configured': bool(stripe.api_key) if STRIPE_AVAILABLE else False,
+        'environment': 'production' if is_production else 'test',
         'env_key_exists': bool(os.getenv('STRIPE_SECRET_KEY')),
         'status': 'Operational' if STRIPE_AVAILABLE else 'Not Available'
     }), 200
@@ -1273,13 +1280,15 @@ def get_ledger_history():
             conn.close()
 
 if __name__ == "__main__":
-    print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND")
+    print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND - PRODUÇÃO")
     print("=" * 60)
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
     print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
     
     if STRIPE_AVAILABLE:
-        print("📦 Versão do Stripe: 8.0.0")
+        is_production = stripe.api_key.startswith('sk_live_')
+        print(f"📦 Versão Stripe: 8.0.0")
+        print(f"🌐 Ambiente Stripe: {'PRODUÇÃO 🎉' if is_production else 'TESTE ⚠️'}")
     
     print("🌐 Rotas públicas:")
     print("   - GET  /health")
@@ -1289,6 +1298,7 @@ if __name__ == "__main__":
     print("   - POST /create-checkout-session")
     print("   - GET  /debug/stripe")
     print("   - POST /api/site/admin/manual-token-send")
+    print("   - GET  /api/site/admin/debug-token")  # ✅ Nova rota de debug
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
@@ -1302,6 +1312,6 @@ if __name__ == "__main__":
     print("=" * 60)
     
     try:
-        app.run(debug=True, port=5000, host='0.0.0.0')
+        app.run(debug=False, port=5000, host='0.0.0.0')
     except Exception as e:
         print(f"❌ Erro ao iniciar o servidor Flask: {e}")
