@@ -210,6 +210,145 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE (ATUALIZADA COM COMPENSAÇÃO)
+def process_automatic_payment(email, amount, method, external_id):
+    """Processar pagamento automaticamente e creditar tokens COM COMPENSAÇÃO DE TAXAS"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        print(f"🔄 Processando pagamento automático: {email} - {amount} ALZ - {method}")
+        
+        # Registrar pagamento
+        cursor.execute(
+            "INSERT INTO payments (email, amount, method, status, tx_hash) VALUES (%s, %s, %s, 'completed', %s) RETURNING id",
+            (email, amount, method, external_id)
+        )
+        payment_id = cursor.fetchone()['id']
+        print(f"✅ Pagamento registrado: ID {payment_id}")
+        
+        # Buscar ou criar usuário
+        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        
+        user_created = False
+        if not user:
+            # Criar usuário automaticamente
+            private_key, wallet_address = generate_polygon_wallet()
+            temp_password = f"temp_{secrets.token_hex(8)}"
+            hashed_password = generate_password_hash(temp_password)
+            
+            cursor.execute(
+                "INSERT INTO users (email, password, wallet_address, private_key, nickname) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (email, hashed_password, wallet_address, private_key, f"User_{email.split('@')[0]}")
+            )
+            user_id = cursor.fetchone()['id']
+            user_created = True
+            print(f"👤 Usuário criado: {email} - Carteira: {wallet_address}")
+        else:
+            user_id = user['id']
+            wallet_address = user['wallet_address']
+            print(f"👤 Usuário existente: {email} - ID: {user_id}")
+        
+        # Verificar/criar saldo
+        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+                (user_id, 0.0)
+            )
+            print(f"💰 Saldo criado para usuário {user_id}")
+        
+        # Creditar tokens (VALOR COMPLETO)
+        cursor.execute(
+            "UPDATE balances SET available = available + %s WHERE user_id = %s",
+            (amount, user_id)
+        )
+        print(f"💰 Tokens creditados: {amount} ALZ para {email}")
+        
+        # Registrar no ledger
+        cursor.execute(
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+            (user_id, 'ALZ', amount, 'purchase', f'Compra automática via {method} - ID: {external_id}')
+        )
+        
+        # ✅ COMPENSAR TAXAS PARA CRIPTO (PROMOÇÃO GRATUITA)
+        if method == 'crypto':
+            compensation_amount = amount * 0.02  # Compensar 2% de taxas
+            cursor.execute(
+                "UPDATE balances SET available = available + %s WHERE user_id = %s",
+                (compensation_amount, user_id)
+            )
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, 'ALZ', compensation_amount, 'fee_compensation', '🎁 Bônus compensação de taxas - Promoção Gratuita')
+            )
+            print(f"🎁 Bônus de taxas: +{compensation_amount} ALZ para {email}")
+        
+        # Atualizar pagamento
+        cursor.execute(
+            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+            (user_id, payment_id)
+        )
+        
+        conn.commit()
+        print(f"🎉 Pagamento automático processado com sucesso: {email} - {amount} ALZ + bônus")
+        
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "user_created": user_created,
+            "wallet_address": wallet_address
+        }
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro processamento automático: {e}")
+        raise
+    finally:
+        conn.close()
+
+# 🔄 FUNÇÃO PARA COMPENSAR TAXAS MANUALMENTE
+def compensate_fees_manually(email, original_amount, received_amount):
+    """Compensar taxas manualmente para garantir valor completo"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Buscar usuário
+        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        
+        if user and original_amount > received_amount:
+            # Calcular diferença
+            difference = original_amount - received_amount
+            
+            # Creditar a diferença
+            cursor.execute(
+                "UPDATE balances SET available = available + %s WHERE user_id = %s",
+                (difference, user['id'])
+            )
+            
+            # Registrar no ledger
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                (user['id'], 'ALZ', difference, 'fee_compensation', '🎁 Compensação manual de taxas - Valor Completo')
+            )
+            
+            conn.commit()
+            print(f"✅ Taxas compensadas manualmente para {email}: +{difference} ALZ")
+            return difference
+        
+    except Exception as e:
+        print(f"❌ Erro ao compensar taxas manualmente: {e}")
+    finally:
+        if 'conn' in locals():
+            conn.close()
+    return 0
+
 # ✅ ROTA DE DEBUG PARA VERIFICAR TOKEN
 @app.route('/api/site/admin/debug-token', methods=['GET', 'POST'])
 def debug_token():
@@ -853,10 +992,24 @@ def site_admin_process_payments():
                 payment = cursor.fetchone()
                 
                 if payment and payment['user_id']:
+                    # Creditar valor completo
                     cursor.execute(
                         "UPDATE balances SET available = available + %s WHERE user_id = %s",
                         (payment['amount'], payment['user_id'])
                     )
+                    
+                    # ✅ COMPENSAR TAXAS PARA CRIPTO
+                    if payment['method'] == 'crypto':
+                        bonus_amount = float(payment['amount']) * 0.02  # Bônus de 2%
+                        cursor.execute(
+                            "UPDATE balances SET available = available + %s WHERE user_id = %s",
+                            (bonus_amount, payment['user_id'])
+                        )
+                        cursor.execute(
+                            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎁 Bônus promoção gratuita')
+                        )
+                        print(f"🎁 Bônus aplicado para {payment['email']}: +{bonus_amount} ALZ")
                     
                     cursor.execute(
                         "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
@@ -869,7 +1022,7 @@ def site_admin_process_payments():
                     )
                     
                     processed_count += 1
-                    print(f"✅ Tokens creditados para pagamento {payment_id}: {payment['amount']} ALZ")
+                    print(f"✅ Tokens creditados para pagamento {payment_id}: {payment['amount']} ALZ + bônus")
             
             conn.commit()
             
@@ -889,94 +1042,6 @@ def site_admin_process_payments():
     except Exception as e:
         print(f"❌ Erro geral process-payments: {e}")
         return jsonify({"error": str(e)}), 500
-
-# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE
-def process_automatic_payment(email, amount, method, external_id):
-    """Processar pagamento automaticamente e creditar tokens"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("BEGIN")
-        
-        print(f"🔄 Processando pagamento automático: {email} - {amount} ALZ - {method}")
-        
-        # Registrar pagamento
-        cursor.execute(
-            "INSERT INTO payments (email, amount, method, status, tx_hash) VALUES (%s, %s, %s, 'completed', %s) RETURNING id",
-            (email, amount, method, external_id)
-        )
-        payment_id = cursor.fetchone()['id']
-        print(f"✅ Pagamento registrado: ID {payment_id}")
-        
-        # Buscar ou criar usuário
-        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        user_created = False
-        if not user:
-            # Criar usuário automaticamente
-            private_key, wallet_address = generate_polygon_wallet()
-            temp_password = f"temp_{secrets.token_hex(8)}"
-            hashed_password = generate_password_hash(temp_password)
-            
-            cursor.execute(
-                "INSERT INTO users (email, password, wallet_address, private_key, nickname) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (email, hashed_password, wallet_address, private_key, f"User_{email.split('@')[0]}")
-            )
-            user_id = cursor.fetchone()['id']
-            user_created = True
-            print(f"👤 Usuário criado: {email} - Carteira: {wallet_address}")
-        else:
-            user_id = user['id']
-            wallet_address = user['wallet_address']
-            print(f"👤 Usuário existente: {email} - ID: {user_id}")
-        
-        # Verificar/criar saldo
-        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
-                (user_id, 0.0)
-            )
-            print(f"💰 Saldo criado para usuário {user_id}")
-        
-        # Creditar tokens
-        cursor.execute(
-            "UPDATE balances SET available = available + %s WHERE user_id = %s",
-            (amount, user_id)
-        )
-        print(f"💰 Tokens creditados: {amount} ALZ para {email}")
-        
-        # Registrar no ledger
-        cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, 'ALZ', amount, 'purchase', f'Compra automática via {method} - ID: {external_id}')
-        )
-        
-        # Atualizar pagamento
-        cursor.execute(
-            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-            (user_id, payment_id)
-        )
-        
-        conn.commit()
-        print(f"🎉 Pagamento automático processado com sucesso: {email} - {amount} ALZ")
-        
-        return {
-            "success": True,
-            "payment_id": payment_id,
-            "user_id": user_id,
-            "user_created": user_created,
-            "wallet_address": wallet_address
-        }
-        
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Erro processamento automático: {e}")
-        raise
-    finally:
-        conn.close()
 
 # ===== ROTAS EXISTENTES DA WALLET =====
 def get_user_id_from_token(token):
@@ -1358,6 +1423,8 @@ if __name__ == "__main__":
         print(f"📦 Versão Stripe: 8.0.0")
         print(f"🌐 Ambiente Stripe: {'PRODUÇÃO 🎉' if is_production else 'TESTE ⚠️'}")
     
+    print("🎁 SISTEMA CONFIGURADO COM TRANSFERÊNCIAS GRATUITAS")
+    print("💸 Compensação automática de 2% para pagamentos cripto")
     print("🌐 Rotas públicas:")
     print("   - GET  /health")
     print("   - GET  /system/info") 
@@ -1366,7 +1433,7 @@ if __name__ == "__main__":
     print("   - POST /create-checkout-session")
     print("   - GET  /debug/stripe")
     print("   - POST /api/site/admin/manual-token-send")
-    print("   - GET  /api/site/admin/debug-token")  # ✅ Nova rota de debug
+    print("   - GET  /api/site/admin/debug-token")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
