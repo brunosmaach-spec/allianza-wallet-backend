@@ -92,23 +92,74 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CONFIGURAÇÃO CORS PARA PRODUÇÃO
+# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO
 CORS(app, resources={
     r"/*": {
         "origins": [
             "https://allianza.tech",
-            "https://www.allianza.tech",
+            "https://www.allianza.tech", 
             "https://wallet.allianza.tech",
             "https://www.wallet.allianza.tech",
             "http://localhost:5173",
-            "http://localhost:3000"
+            "http://localhost:5174",
+            "http://localhost:3000",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+        "allow_headers": [
+            "Content-Type", 
+            "Authorization", 
+            "X-Requested-With",
+            "Accept",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers"
+        ],
+        "expose_headers": ["Content-Range", "X-Content-Range"],
         "supports_credentials": True,
         "max_age": 3600
     }
 })
+
+# ✅ MIDDLEWARE CORS MANUAL PARA GARANTIR
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin', '')
+    allowed_origins = [
+        "https://allianza.tech",
+        "https://www.allianza.tech",
+        "https://wallet.allianza.tech", 
+        "https://www.wallet.allianza.tech",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174"
+    ]
+    
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Max-Age', '3600')
+    
+    return response
+
+# ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
+@app.route('/api/site/admin/payments', methods=['OPTIONS'])
+@app.route('/api/site/admin/stats', methods=['OPTIONS'])
+@app.route('/api/site/admin/process-payments', methods=['OPTIONS']) 
+@app.route('/api/site/admin/manual-token-send', methods=['OPTIONS'])
+@app.route('/api/site/admin/debug-token', methods=['OPTIONS'])
+@app.route('/api/site/purchase', methods=['OPTIONS'])
+@app.route('/create-checkout-session', methods=['OPTIONS'])
+def options_handler():
+    return '', 200
 
 # 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO
 ADMIN_USERS = {
@@ -122,6 +173,14 @@ SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE2
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
+
+# ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE
+print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
+print(f"🔑 SITE_ADMIN_TOKEN: '{SITE_ADMIN_TOKEN}'")
+print(f"📏 Comprimento: {len(SITE_ADMIN_TOKEN)}")
+print(f"🔐 ADMIN_JWT_SECRET: '{ADMIN_JWT_SECRET}'")
+print(f"👤 ADMIN_PASSWORD_1: '{ADMIN_PASSWORD_1}'")
+print("=" * 60)
 
 # Inicializa o banco de dados
 init_db()
@@ -150,105 +209,21 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE
-def process_automatic_payment(email, amount, method, external_id):
-    """Processar pagamento automaticamente e creditar tokens"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("BEGIN")
-        
-        print(f"🔄 Processando pagamento automático: {email} - {amount} ALZ - {method}")
-        
-        # Registrar pagamento
-        cursor.execute(
-            "INSERT INTO payments (email, amount, method, status, tx_hash) VALUES (%s, %s, %s, 'completed', %s) RETURNING id",
-            (email, amount, method, external_id)
-        )
-        payment_id = cursor.fetchone()['id']
-        print(f"✅ Pagamento registrado: ID {payment_id}")
-        
-        # Buscar ou criar usuário
-        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        user_created = False
-        if not user:
-            # Criar usuário automaticamente
-            private_key, wallet_address = generate_polygon_wallet()
-            temp_password = f"temp_{secrets.token_hex(8)}"
-            hashed_password = generate_password_hash(temp_password)
-            
-            cursor.execute(
-                "INSERT INTO users (email, password, wallet_address, private_key, nickname) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (email, hashed_password, wallet_address, private_key, f"User_{email.split('@')[0]}")
-            )
-            user_id = cursor.fetchone()['id']
-            user_created = True
-            print(f"👤 Usuário criado: {email} - Carteira: {wallet_address}")
-        else:
-            user_id = user['id']
-            wallet_address = user['wallet_address']
-            print(f"👤 Usuário existente: {email} - ID: {user_id}")
-        
-        # Verificar/criar saldo
-        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
-                (user_id, 0.0)
-            )
-            print(f"💰 Saldo criado para usuário {user_id}")
-        
-        # Creditar tokens
-        cursor.execute(
-            "UPDATE balances SET available = available + %s WHERE user_id = %s",
-            (amount, user_id)
-        )
-        print(f"💰 Tokens creditados: {amount} ALZ para {email}")
-        
-        # Registrar no ledger
-        cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, 'ALZ', amount, 'purchase', f'Compra automática via {method} - ID: {external_id}')
-        )
-        
-        # Atualizar pagamento
-        cursor.execute(
-            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-            (user_id, payment_id)
-        )
-        
-        conn.commit()
-        print(f"🎉 Pagamento automático processado com sucesso: {email} - {amount} ALZ")
-        
-        return {
-            "success": True,
-            "payment_id": payment_id,
-            "user_id": user_id,
-            "user_created": user_created,
-            "wallet_address": wallet_address
-        }
-        
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Erro processamento automático: {e}")
-        raise
-    finally:
-        conn.close()
-
 # ✅ ROTA DE DEBUG PARA VERIFICAR TOKEN
-@app.route('/api/site/admin/debug-token', methods=['GET'])
+@app.route('/api/site/admin/debug-token', methods=['GET', 'POST'])
 def debug_token():
-    """Debug para verificar se o token está correto"""
+    """Debug completo para verificar o token"""
     auth_header = request.headers.get('Authorization', '')
     
-    print("=" * 50)
+    print("=" * 60)
     print("🔐 DEBUG TOKEN - INÍCIO")
+    print(f"📨 Método: {request.method}")
     print(f"📨 Header Authorization: {auth_header}")
+    print(f"🌐 Origin: {request.headers.get('Origin')}")
+    print(f"🌐 Host: {request.headers.get('Host')}")
     
     if not auth_header.startswith('Bearer '):
+        print("❌ Header não começa com Bearer")
         return jsonify({
             "error": "Header não começa com Bearer",
             "header_received": auth_header
@@ -264,22 +239,26 @@ def debug_token():
     print(f"✅ Tokens são iguais? {admin_token == expected_token}")
     
     # Verificação caractere por caractere
-    if len(admin_token) != len(expected_token):
-        print("❌ Comprimentos diferentes!")
-        for i in range(min(len(admin_token), len(expected_token))):
-            if admin_token[i] != expected_token[i]:
-                print(f"   Diferença na posição {i}: '{admin_token[i]}' vs '{expected_token[i]}'")
-                break
+    if admin_token != expected_token:
+        print("❌ Tokens não coincidem!")
+        print("🔍 Comparação caractere por caractere:")
+        max_len = max(len(admin_token), len(expected_token))
+        for i in range(max_len):
+            char_rec = admin_token[i] if i < len(admin_token) else '❌ FIM'
+            char_exp = expected_token[i] if i < len(expected_token) else '❌ FIM'
+            match = "✅" if char_rec == char_exp else "❌"
+            print(f"   Posição {i}: '{char_rec}' {match} '{char_exp}'")
     
     print("🔐 DEBUG TOKEN - FIM")
-    print("=" * 50)
+    print("=" * 60)
     
     if admin_token == expected_token:
         return jsonify({
             "success": True,
             "message": "Token válido!",
             "token_length": len(admin_token),
-            "token_match": True
+            "token_match": True,
+            "backend_token_preview": f"{expected_token[:10]}...{expected_token[-4:]}"
         }), 200
     else:
         return jsonify({
@@ -909,6 +888,94 @@ def site_admin_process_payments():
     except Exception as e:
         print(f"❌ Erro geral process-payments: {e}")
         return jsonify({"error": str(e)}), 500
+
+# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE
+def process_automatic_payment(email, amount, method, external_id):
+    """Processar pagamento automaticamente e creditar tokens"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        print(f"🔄 Processando pagamento automático: {email} - {amount} ALZ - {method}")
+        
+        # Registrar pagamento
+        cursor.execute(
+            "INSERT INTO payments (email, amount, method, status, tx_hash) VALUES (%s, %s, %s, 'completed', %s) RETURNING id",
+            (email, amount, method, external_id)
+        )
+        payment_id = cursor.fetchone()['id']
+        print(f"✅ Pagamento registrado: ID {payment_id}")
+        
+        # Buscar ou criar usuário
+        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        
+        user_created = False
+        if not user:
+            # Criar usuário automaticamente
+            private_key, wallet_address = generate_polygon_wallet()
+            temp_password = f"temp_{secrets.token_hex(8)}"
+            hashed_password = generate_password_hash(temp_password)
+            
+            cursor.execute(
+                "INSERT INTO users (email, password, wallet_address, private_key, nickname) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (email, hashed_password, wallet_address, private_key, f"User_{email.split('@')[0]}")
+            )
+            user_id = cursor.fetchone()['id']
+            user_created = True
+            print(f"👤 Usuário criado: {email} - Carteira: {wallet_address}")
+        else:
+            user_id = user['id']
+            wallet_address = user['wallet_address']
+            print(f"👤 Usuário existente: {email} - ID: {user_id}")
+        
+        # Verificar/criar saldo
+        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+                (user_id, 0.0)
+            )
+            print(f"💰 Saldo criado para usuário {user_id}")
+        
+        # Creditar tokens
+        cursor.execute(
+            "UPDATE balances SET available = available + %s WHERE user_id = %s",
+            (amount, user_id)
+        )
+        print(f"💰 Tokens creditados: {amount} ALZ para {email}")
+        
+        # Registrar no ledger
+        cursor.execute(
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+            (user_id, 'ALZ', amount, 'purchase', f'Compra automática via {method} - ID: {external_id}')
+        )
+        
+        # Atualizar pagamento
+        cursor.execute(
+            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+            (user_id, payment_id)
+        )
+        
+        conn.commit()
+        print(f"🎉 Pagamento automático processado com sucesso: {email} - {amount} ALZ")
+        
+        return {
+            "success": True,
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "user_created": user_created,
+            "wallet_address": wallet_address
+        }
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro processamento automático: {e}")
+        raise
+    finally:
+        conn.close()
 
 # ===== ROTAS EXISTENTES DA WALLET =====
 def get_user_id_from_token(token):
