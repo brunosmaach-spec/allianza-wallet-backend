@@ -353,6 +353,12 @@ def compensate_fees_manually(email, original_amount, received_amount):
             conn.close()
     return 0
 
+# ✅ VALIDAÇÃO DE VALOR MÍNIMO PARA CRIPTO
+def validate_crypto_minimum_amount(amount_brl):
+    """Validar valor mínimo para pagamentos em cripto"""
+    min_amount_brl = 10.0  # R$ 10,00 mínimo
+    return float(amount_brl) >= min_amount_brl
+
 # ✅ ROTA DE DEBUG PARA VERIFICAR TOKEN
 @app.route('/api/site/admin/debug-token', methods=['GET', 'POST'])
 def debug_token():
@@ -960,6 +966,14 @@ def site_process_purchase():
     
     if not email or not amount:
         return jsonify({"error": "Email e valor são obrigatórios"}), 400
+    
+    # ✅ VALIDAÇÃO DE VALOR MÍNIMO PARA CRIPTO
+    if method == 'crypto':
+        amount_brl = float(amount) * 0.10  # Converter ALZ para BRL
+        if not validate_crypto_minimum_amount(amount_brl):
+            return jsonify({
+                "error": f"Valor mínimo para pagamento com criptomoedas é R$ 10,00 (equivalente a 100 ALZ)"
+            }), 400
     
     conn = get_db_connection()
     cursor = conn.cursor()
