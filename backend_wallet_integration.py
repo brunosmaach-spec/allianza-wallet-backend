@@ -161,25 +161,26 @@ def after_request(response):
 def options_handler():
     return '', 200
 
-# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO
+# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO (CORRIGIDO)
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD_1', 'CdE25$$$')
 ADMIN_USERS = {
-    os.getenv('ADMIN_USER_1', 'admin'): os.getenv('ADMIN_PASSWORD_1', 'admin123'),
+    'admin': ADMIN_PASSWORD,
 }
 
-# ✅ TOKEN CORRETO - PRODUÇÃO
+# ✅ TOKEN CORRETO - PRODUÇÃO (FORCE O TOKEN CORRETO)
 ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza-prod')
-SITE_ADMIN_TOKEN = os.getenv('SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTERES
 
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
 
-# ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE
+# ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE (CORRIGIDO)
 print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
 print(f"🔑 SITE_ADMIN_TOKEN: '{SITE_ADMIN_TOKEN}'")
 print(f"📏 Comprimento: {len(SITE_ADMIN_TOKEN)}")
 print(f"🔐 ADMIN_JWT_SECRET: '{ADMIN_JWT_SECRET}'")
-print(f"👤 ADMIN_PASSWORD_1: '{ADMIN_PASSWORD_1}'")
+print(f"👤 ADMIN_PASSWORD: '{ADMIN_PASSWORD}'")
 print("=" * 60)
 
 # Inicializa o banco de dados
