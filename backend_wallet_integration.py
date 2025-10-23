@@ -162,7 +162,7 @@ def after_request(response):
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])  # ✅ NOVO: NowPayments CORS
-@app.route('/api/nowpayments/create-invoice', methods=['OPTIONS'])  # ✅ NOVO: Criação de fatura NowPayments CORS
+
 def options_handler():
     return '', 200
 
@@ -1252,92 +1252,7 @@ def site_admin_process_payments():
 
 # ===== ROTAS EXISTENTES DA WALLET =====
 
-# ₿ Rota para criar fatura NowPayments (API)
-@app.route('/api/nowpayments/create-invoice', methods=['POST'])
-def create_nowpayments_invoice():
-    if not NOWPAYMENTS_API_KEY:
-        return jsonify({"error": "NowPayments API Key não configurada no backend"}), 500
 
-    data = request.get_json()
-    amount = data.get('amount')
-    email = data.get('email')
-    
-    if not amount or not email:
-        return jsonify({"error": "Parâmetros 'amount' e 'email' são obrigatórios"}), 400
-
-    try:
-        # ✅ 1. REGISTRAR PAGAMENTO NO BANCO (STATUS: PENDING_NOWPAYMENTS)
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Taxa de conversão R$ para ALZ (1 ALZ = R$ 0,10)
-        alz_amount = float(amount) / 0.10
-        
-        cursor.execute("BEGIN")
-        
-        # Buscar ou criar usuário (lógica simplificada para fins de teste)
-        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        user_id = None
-        if user:
-            user_id = user['id']
-
-        # Registrar pagamento com status pendente e valor em ALZ
-        cursor.execute(
-            "INSERT INTO payments (email, amount, method, status, user_id) VALUES (%s, %s, %s, 'pending_nowpayments', %s) RETURNING id",
-            (email, alz_amount, 'crypto', user_id)
-        )
-        payment_id = cursor.fetchone()['id']
-        
-        # ✅ 2. CRIAR FATURA NA NOWPAYMENTS
-        nowpayments_url = "https://api.nowpayments.io/v1/invoice"
-        headers = {
-            "x-api-key": NOWPAYMENTS_API_KEY,
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "price_amount": float(amount),
-            "price_currency": "brl",
-            "pay_currency": "usdt",
-            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments", # ✅ URL DO SEU BACKEND
-            "order_id": str(payment_id), # ✅ USAR O ID DO PAGAMENTO DO SEU BANCO
-            "order_description": f"Compra de {alz_amount:.2f} ALZ por R$ {float(amount):.2f}",
-            "success_url": "https://allianza.tech/success",
-            "cancel_url": "https://allianza.tech/cancel",
-            "buyer_email": email
-        }
-        
-        response = requests.post(nowpayments_url, headers=headers, json=payload)
-        response.raise_for_status()
-        invoice_data = response.json()
-        
-        # ✅ 3. ATUALIZAR PAGAMENTO COM ID DA FATURA
-        cursor.execute(
-            "UPDATE payments SET external_id = %s WHERE id = %s",
-            (invoice_data.get('id'), payment_id)
-        )
-        
-        conn.commit()
-        
-        return jsonify({
-            "success": True,
-            "message": "Fatura NowPayments criada com sucesso",
-            "invoice_url": invoice_data.get('invoice_url'),
-            "payment_id": payment_id,
-            "invoice_id": invoice_data.get('id')
-        }), 200
-        
-    except requests.exceptions.RequestException as req_e:
-        conn.rollback()
-        print(f"❌ Erro na API NowPayments: {req_e.response.text if req_e.response else str(req_e)}")
-        return jsonify({"error": f"Erro ao criar fatura NowPayments: {req_e.response.text if req_e.response else str(req_e)}"}), 500
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Erro geral create-invoice: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
 
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 def get_user_id_from_token(token):
@@ -1367,7 +1282,7 @@ def authenticate_request():
         "/api/site/admin/debug-token",
         "/api/nowpayments/diagnostic",  # ✅ NOVO
         "/api/nowpayments/test-signature",  # ✅ NOVO
-        "/api/nowpayments/create-invoice"  # ✅ NOVO: Rota para criação de fatura NowPayments
+
     ]
     
     if request.path.startswith("/api/site/admin") or request.path == "/health":
