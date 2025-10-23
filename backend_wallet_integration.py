@@ -162,6 +162,7 @@ def after_request(response):
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])  # ✅ NOVO: NowPayments CORS
+@app.route('/api/nowpayments/create-invoice', methods=['OPTIONS'])  # ✅ NOVO: Criação de fatura NowPayments CORS
 def options_handler():
     return '', 200
 
@@ -1365,7 +1366,8 @@ def authenticate_request():
         "/debug/stripe",
         "/api/site/admin/debug-token",
         "/api/nowpayments/diagnostic",  # ✅ NOVO
-        "/api/nowpayments/test-signature"  # ✅ NOVO
+        "/api/nowpayments/test-signature",  # ✅ NOVO
+        "/api/nowpayments/create-invoice"  # ✅ NOVO: Rota para criação de fatura NowPayments
     ]
     
     if request.path.startswith("/api/site/admin") or request.path == "/health":
