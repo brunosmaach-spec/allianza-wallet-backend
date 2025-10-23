@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO
+# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timedelta
 import time
 import jwt
+import requests
 from functools import wraps
 import hmac
 import hashlib
@@ -17,9 +18,11 @@ load_dotenv()
 
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
+print("✅ NOWPAYMENTS CORRIGIDO - WEBHOOK URL COMPLETA")
 print("=" * 60)
 print(f"🔑 SITE_ADMIN_TOKEN: {os.getenv('SITE_ADMIN_TOKEN', 'NÃO ENCONTRADO')}")
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
+print(f"🔗 NOWPAYMENTS_IPN: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '❌ NÃO ENCONTRADO'}")
 print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
 print("=" * 60)
 
@@ -158,6 +161,7 @@ def after_request(response):
 @app.route('/api/site/admin/debug-token', methods=['OPTIONS'])
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
+@app.route('/webhook/nowpayments', methods=['OPTIONS'])  # ✅ NOVO: NowPayments CORS
 def options_handler():
     return '', 200
 
@@ -181,6 +185,7 @@ print(f"🔑 SITE_ADMIN_TOKEN: '{SITE_ADMIN_TOKEN}'")
 print(f"📏 Comprimento: {len(SITE_ADMIN_TOKEN)}")
 print(f"🔐 ADMIN_JWT_SECRET: '{ADMIN_JWT_SECRET}'")
 print(f"👤 ADMIN_PASSWORD: '{ADMIN_PASSWORD}'")
+print(f"🔗 NOWPAYMENTS_IPN_SECRET: '{NOWPAYMENTS_IPN_SECRET}' ({len(NOWPAYMENTS_IPN_SECRET)} chars)")
 print("=" * 60)
 
 # Inicializa o banco de dados
@@ -667,57 +672,258 @@ def stripe_webhook():
         print(f"❌ Erro webhook Stripe PRODUÇÃO: {e}")
         return jsonify({'error': str(e)}), 400
 
-@app.route('/webhook/nowpayments', methods=['POST'])
-def nowpayments_webhook():
-    """Webhook para pagamentos NowPayments (Cripto)"""
+# ✅ FUNÇÃO PARA VERIFICAR ASSINATURA NOWPAYMENTS (CORRIGIDA)
+def verify_nowpayments_signature(payload_bytes, received_signature):
+    """Verificar assinatura NowPayments CORRETAMENTE"""
     try:
-        received_signature = request.headers.get('x-nowpayments-ipn-signature')
-        payload = request.get_data(as_text=True)
-        
-        print(f"📥 Webhook NowPayments recebido")
-        
         if not received_signature:
-            print("❌ Assinatura IPN não fornecida")
-            return jsonify({'error': 'Missing signature'}), 401
-        
+            print("❌ Assinatura não fornecida")
+            return False
+            
+        # ✅ CORREÇÃO: Usar bytes do payload diretamente
         expected_signature = hmac.new(
-            bytes(NOWPAYMENTS_IPN_SECRET, 'utf-8'),
-            msg=bytes(payload, 'utf-8'),
+            key=NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
+            msg=payload_bytes,  # Já em bytes
             digestmod=hashlib.sha512
         ).hexdigest()
         
-        if not hmac.compare_digest(received_signature, expected_signature):
-            print("❌ Assinatura IPN inválida")
-            return jsonify({'error': 'Invalid signature'}), 401
+        print(f"🔐 Assinatura esperada: {expected_signature}")
+        print(f"🔐 Assinatura recebida: {received_signature}")
         
-        data = request.json
-        print(f"📊 Dados NowPayments: {data}")
+        return hmac.compare_digest(received_signature, expected_signature)
         
+    except Exception as e:
+        print(f"❌ Erro verificação assinatura: {e}")
+        return False
+
+# ✅ FUNÇÃO PARA EXTRAIR DADOS NOWPAYMENTS (CORRIGIDA)
+def extract_nowpayments_data(data):
+    """Extrai dados CORRETAMENTE do payload NowPayments"""
+    try:
+        print(f"📦 Payload completo recebido: {data}")
+        
+        # ✅ CORREÇÃO: Campos conforme documentação oficial
         payment_status = data.get('payment_status')
-        if payment_status in ['finished', 'confirmed']:
-            email = data.get('customer_email') or data.get('buyer_email')
-            amount = float(data.get('pay_amount', 0))
-            payment_id = data.get('payment_id')
+        payment_id = data.get('payment_id')
+        
+        # Múltiplos campos possíveis para email
+        email = (data.get('customer_email') or 
+                data.get('payer_email') or
+                data.get('buyer_email') or
+                data.get('email') or
+                extract_email_from_string(data.get('order_id', '')) or
+                extract_email_from_string(data.get('description', '')))
+        
+        # Valores - usar pay_amount ou actually_paid
+        pay_amount = float(data.get('pay_amount', 0))
+        actually_paid = float(data.get('actually_paid', 0))
+        invoice_amount = float(data.get('invoice_amount', 0))
+        
+        # ✅ CORREÇÃO: Lógica de amount priorizada
+        if actually_paid > 0:
+            final_amount = actually_paid
+        elif pay_amount > 0:
+            final_amount = pay_amount
+        else:
+            final_amount = invoice_amount
             
-            if email and amount > 0:
+        currency = data.get('pay_currency') or data.get('currency', 'usdt')
+        
+        return {
+            'payment_status': payment_status,
+            'payment_id': payment_id,
+            'email': email,
+            'amount': final_amount,
+            'currency': currency,
+            'actually_paid': actually_paid,
+            'pay_amount': pay_amount,
+            'raw_data': data
+        }
+        
+    except Exception as e:
+        print(f"❌ Erro extração dados: {e}")
+        return None
+
+def extract_email_from_string(text):
+    """Tenta extrair email de string"""
+    import re
+    if not text:
+        return None
+    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', str(text))
+    return email_match.group() if email_match else None
+
+# ✅ WEBHOOK NOWPAYMENTS CORRIGIDO - URL COMPLETA
+@app.route('/webhook/nowpayments', methods=['POST', 'GET'])
+def nowpayments_webhook():
+    """Webhook NowPayments - URL CORRETA: /webhook/nowpayments"""
+    try:
+        print("=" * 70)
+        print("🎯 NOWPAYMENTS WEBHOOK CHAMADO - URL CORRETA")
+        print("=" * 70)
+        
+        # Se for GET, retorna status (para teste)
+        if request.method == 'GET':
+            return jsonify({
+                "status": "active", 
+                "message": "NowPayments webhook está operacional",
+                "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+                "method": "POST",
+                "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET),
+                "timestamp": datetime.now().isoformat()
+            }), 200
+        
+        # ✅ CORREÇÃO: Obter payload como BYTES
+        payload_bytes = request.get_data()
+        received_signature = request.headers.get('x-nowpayments-ipn-signature')
+        
+        print(f"📍 URL Recebida: {request.url}")
+        print(f"📧 Host: {request.headers.get('Host')}")
+        print(f"🔑 Assinatura: {received_signature}")
+        print(f"📦 Tamanho do payload: {len(payload_bytes)} bytes")
+        print(f"🔐 IPN Secret length: {len(NOWPAYMENTS_IPN_SECRET)}")
+        
+        # ✅ CORREÇÃO: Verificar assinatura com bytes
+        if not verify_nowpayments_signature(payload_bytes, received_signature):
+            print("❌ Assinatura inválida!")
+            return jsonify({'error': 'Invalid signature', 'received_signature': received_signature}), 401
+        
+        print("✅ Assinatura válida! Processando payload...")
+        
+        # ✅ CORREÇÃO: Parse JSON
+        try:
+            data = json.loads(payload_bytes.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON inválido: {e}")
+            print(f"📄 Payload raw: {payload_bytes.decode('utf-8', errors='ignore')}")
+            return jsonify({'error': 'Invalid JSON'}), 400
+        
+        # ✅ CORREÇÃO: Extrair dados estruturados
+        payment_data = extract_nowpayments_data(data)
+        if not payment_data:
+            return jsonify({'error': 'Invalid payload structure'}), 400
+        
+        payment_status = payment_data['payment_status']
+        email = payment_data['email']
+        amount = payment_data['amount']
+        payment_id = payment_data['payment_id']
+        
+        print(f"📊 Status do pagamento: {payment_status}")
+        print(f"📧 Email identificado: {email}")
+        print(f"💰 Valor: {amount}")
+        print(f"🆔 ID do pagamento: {payment_id}")
+        
+        # ✅ CORREÇÃO: Lógica de status aprimorada
+        if payment_status in ['finished', 'confirmed', 'success']:
+            if not email:
+                print("❌ Email não encontrado no payload")
+                return jsonify({'error': 'Email not found in payload'}), 400
+            
+            if amount <= 0:
+                print("❌ Valor inválido")
+                return jsonify({'error': 'Invalid amount'}), 400
+            
+            print(f"🎯 Processando pagamento confirmado: {email} - {amount}")
+            
+            try:
+                # Processar pagamento automático
                 result = process_automatic_payment(email, amount, 'crypto', payment_id)
-                print(f"✅ Pagamento NowPayments processado: {email} - {amount} ALZ")
+                print(f"✅ Pagamento processado com sucesso: {result}")
                 return jsonify(result), 200
-            else:
-                print("⚠️ Dados incompletos no webhook NowPayments")
-                return jsonify({'error': 'Incomplete data'}), 400
+                
+            except Exception as e:
+                print(f"❌ Erro processamento pagamento: {e}")
+                return jsonify({'error': f'Payment processing failed: {str(e)}'}), 500
                 
         elif payment_status == 'failed':
-            payment_id = data.get('payment_id')
-            print(f"❌ Pagamento NowPayments falhou: {payment_id}")
-            return jsonify({'success': True, 'message': 'Payment failed logged'}), 200
+            print(f"❌ Pagamento falhou: {payment_id}")
+            log_payment_failure(payment_id, data, 'failed')
+            return jsonify({'success': True, 'message': 'Payment failure logged'}), 200
+            
+        elif payment_status in ['waiting', 'confirming', 'partially_paid']:
+            print(f"⏳ Status intermediário: {payment_status}")
+            return jsonify({'success': True, 'message': f'Waiting for confirmation: {payment_status}'}), 200
+            
         else:
-            print(f"📊 Status intermediário NowPayments: {payment_status}")
-            return jsonify({'success': True, 'message': 'Intermediate status received'}), 200
+            print(f"⚠️ Status desconhecido: {payment_status}")
+            return jsonify({'success': True, 'message': f'Unknown status: {payment_status}'}), 200
             
     except Exception as e:
-        print(f"❌ Erro webhook NowPayments: {e}")
-        return jsonify({'error': str(e)}), 400
+        print(f"❌ ERRO CRÍTICO no webhook: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Webhook processing failed: {str(e)}'}), 500
+
+def log_payment_failure(payment_id, data, status):
+    """Registrar falha de pagamento"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        email = data.get('customer_email') or data.get('payer_email')
+        amount = data.get('pay_amount', 0)
+        
+        cursor.execute('''
+            INSERT INTO payment_logs 
+            (payment_id, email, amount, status, raw_data, created_at)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        ''', (payment_id, email, amount, status, json.dumps(data)))
+        
+        conn.commit()
+        conn.close()
+        print(f"📝 Falha registrada no banco: {payment_id}")
+    except Exception as e:
+        print(f"❌ Erro ao registrar falha: {e}")
+
+# ✅ ENDPOINT DE DIAGNÓSTICO NOWPAYMENTS
+@app.route('/api/nowpayments/diagnostic', methods=['GET'])
+def nowpayments_diagnostic():
+    """Diagnóstico completo da NowPayments"""
+    return jsonify({
+        'nowpayments_configured': bool(NOWPAYMENTS_IPN_SECRET),
+        'ipn_secret_length': len(NOWPAYMENTS_IPN_SECRET),
+        'required_secret_length': 64,
+        'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
+        'status': 'OPERATIONAL' if len(NOWPAYMENTS_IPN_SECRET) >= 32 else 'CONFIGURATION_ERROR',
+        'fix_required': len(NOWPAYMENTS_IPN_SECRET) < 32,
+        'setup_instructions': {
+            'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
+            'ipn_secret': NOWPAYMENTS_IPN_SECRET,
+            'note': 'Configure no painel NowPayments em Payment flow customization -> Instant payment notifications'
+        }
+    })
+
+# ✅ TESTE DE ASSINATURA NOWPAYMENTS
+@app.route('/api/nowpayments/test-signature', methods=['GET', 'POST'])
+def test_nowpayments_signature():
+    """Testar geração de assinatura"""
+    test_data = {
+        "payment_id": "test_123456789",
+        "payment_status": "finished", 
+        "pay_amount": 100.0,
+        "actually_paid": 100.0,
+        "pay_currency": "usdt",
+        "customer_email": "test@allianza.tech"
+    }
+    
+    payload_bytes = json.dumps(test_data).encode('utf-8')
+    signature = hmac.new(
+        key=NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
+        msg=payload_bytes,
+        digestmod=hashlib.sha512
+    ).hexdigest()
+    
+    return jsonify({
+        'test_payload': test_data,
+        'generated_signature': signature,
+        'ipn_secret_preview': NOWPAYMENTS_IPN_SECRET[:8] + '...' + NOWPAYMENTS_IPN_SECRET[-8:],
+        'signature_length': len(signature),
+        'verification_url': '/webhook/nowpayments',
+        'headers_required': {
+            'Content-Type': 'application/json',
+            'x-nowpayments-ipn-signature': signature
+        },
+        'curl_test_command': f'curl -X POST https://allianza-wallet-backend.onrender.com/webhook/nowpayments -H "Content-Type: application/json" -H "x-nowpayments-ipn-signature: {signature}" -d \'{json.dumps(test_data)}\''
+    })
 
 # 🔑 Login Admin - PRODUÇÃO
 @app.route('/admin/login', methods=['POST'])
@@ -1044,6 +1250,95 @@ def site_admin_process_payments():
         return jsonify({"error": str(e)}), 500
 
 # ===== ROTAS EXISTENTES DA WALLET =====
+
+# ₿ Rota para criar fatura NowPayments (API)
+@app.route('/api/nowpayments/create-invoice', methods=['POST'])
+def create_nowpayments_invoice():
+    if not NOWPAYMENTS_API_KEY:
+        return jsonify({"error": "NowPayments API Key não configurada no backend"}), 500
+
+    data = request.get_json()
+    amount = data.get('amount')
+    email = data.get('email')
+    
+    if not amount or not email:
+        return jsonify({"error": "Parâmetros 'amount' e 'email' são obrigatórios"}), 400
+
+    try:
+        # ✅ 1. REGISTRAR PAGAMENTO NO BANCO (STATUS: PENDING_NOWPAYMENTS)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Taxa de conversão R$ para ALZ (1 ALZ = R$ 0,10)
+        alz_amount = float(amount) / 0.10
+        
+        cursor.execute("BEGIN")
+        
+        # Buscar ou criar usuário (lógica simplificada para fins de teste)
+        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        
+        user_id = None
+        if user:
+            user_id = user['id']
+
+        # Registrar pagamento com status pendente e valor em ALZ
+        cursor.execute(
+            "INSERT INTO payments (email, amount, method, status, user_id) VALUES (%s, %s, %s, 'pending_nowpayments', %s) RETURNING id",
+            (email, alz_amount, 'crypto', user_id)
+        )
+        payment_id = cursor.fetchone()['id']
+        
+        # ✅ 2. CRIAR FATURA NA NOWPAYMENTS
+        nowpayments_url = "https://api.nowpayments.io/v1/invoice"
+        headers = {
+            "x-api-key": NOWPAYMENTS_API_KEY,
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "price_amount": float(amount),
+            "price_currency": "brl",
+            "pay_currency": "usdt",
+            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments", # ✅ URL DO SEU BACKEND
+            "order_id": str(payment_id), # ✅ USAR O ID DO PAGAMENTO DO SEU BANCO
+            "order_description": f"Compra de {alz_amount:.2f} ALZ por R$ {float(amount):.2f}",
+            "success_url": "https://allianza.tech/success",
+            "cancel_url": "https://allianza.tech/cancel",
+            "buyer_email": email
+        }
+        
+        response = requests.post(nowpayments_url, headers=headers, json=payload)
+        response.raise_for_status()
+        invoice_data = response.json()
+        
+        # ✅ 3. ATUALIZAR PAGAMENTO COM ID DA FATURA
+        cursor.execute(
+            "UPDATE payments SET external_id = %s WHERE id = %s",
+            (invoice_data.get('id'), payment_id)
+        )
+        
+        conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Fatura NowPayments criada com sucesso",
+            "invoice_url": invoice_data.get('invoice_url'),
+            "payment_id": payment_id,
+            "invoice_id": invoice_data.get('id')
+        }), 200
+        
+    except requests.exceptions.RequestException as req_e:
+        conn.rollback()
+        print(f"❌ Erro na API NowPayments: {req_e.response.text if req_e.response else str(req_e)}")
+        return jsonify({"error": f"Erro ao criar fatura NowPayments: {req_e.response.text if req_e.response else str(req_e)}"}), 500
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro geral create-invoice: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 def get_user_id_from_token(token):
     try:
         parts = token.split("_")
@@ -1068,7 +1363,9 @@ def authenticate_request():
         "/create-checkout-session",
         "/admin/login",
         "/debug/stripe",
-        "/api/site/admin/debug-token"  # ✅ Adicionada rota de debug
+        "/api/site/admin/debug-token",
+        "/api/nowpayments/diagnostic",  # ✅ NOVO
+        "/api/nowpayments/test-signature"  # ✅ NOVO
     ]
     
     if request.path.startswith("/api/site/admin") or request.path == "/health":
@@ -1275,7 +1572,7 @@ def check_user():
     finally:
         conn.close()
 
-# ✅ ROTA DE HEALTH CHECK - PRODUÇÃO
+# ✅ ROTA DE HEALTH CHECK - PRODUÇÃO (ATUALIZADA)
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -1285,10 +1582,13 @@ def health_check():
         "version": "1.0.0",
         "environment": "production",
         "stripe_available": STRIPE_AVAILABLE,
-        "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test"
+        "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
+        "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET),
+        "nowpayments_webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+        "nowpayments_status": "ACTIVE" if NOWPAYMENTS_IPN_SECRET else "INACTIVE"
     }), 200
 
-# ✅ Rota para informações do sistema - PRODUÇÃO
+# ✅ Rota para informações do sistema - PRODUÇÃO (ATUALIZADA)
 @app.route('/system/info', methods=['GET'])
 def system_info():
     return jsonify({
@@ -1303,7 +1603,9 @@ def system_info():
             "stripe_available": STRIPE_AVAILABLE,
             "stripe_version": "8.0.0",
             "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
-            "neon_database": True
+            "neon_database": True,
+            "nowpayments_webhook": True,
+            "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET)
         },
         "cors_domains": [
             "http://localhost:5173",
@@ -1417,6 +1719,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
     print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
+    print(f"🔗 NowPayments Webhook: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
+    print(f"🔑 NowPayments IPN Secret: {NOWPAYMENTS_IPN_SECRET[:8]}... ({len(NOWPAYMENTS_IPN_SECRET)} chars)")
     
     if STRIPE_AVAILABLE:
         is_production = stripe.api_key.startswith('sk_live_')
@@ -1434,6 +1738,10 @@ if __name__ == "__main__":
     print("   - GET  /debug/stripe")
     print("   - POST /api/site/admin/manual-token-send")
     print("   - GET  /api/site/admin/debug-token")
+    print("🔗 NowPayments:")
+    print("   - POST /webhook/nowpayments")
+    print("   - GET  /api/nowpayments/diagnostic")
+    print("   - GET  /api/nowpayments/test-signature")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
