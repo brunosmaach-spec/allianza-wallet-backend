@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO COM STAKING)
+# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO COM STAKING E CORS CORRIGIDO)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -10,6 +10,7 @@ from functools import wraps
 import hmac
 import hashlib
 import secrets
+import json
 
 # ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO
 from dotenv import load_dotenv
@@ -18,11 +19,7 @@ load_dotenv()
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
 print("✅ STAKING COMPLETO COM PENALIDADES")
-print("=" * 60)
-print(f"🔑 SITE_ADMIN_TOKEN: {os.getenv('SITE_ADMIN_TOKEN', 'NÃO ENCONTRADO')}")
-print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
-print(f"🔗 NOWPAYMENTS_IPN: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '❌ NÃO ENCONTRADO'}")
-print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
+print("✅ CORS CONFIGURADO PARA PRODUÇÃO")
 print("=" * 60)
 
 # ✅ INSTALAÇÃO FORÇADA DO STRIPE
@@ -93,22 +90,24 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO
+# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO
+ALLOWED_ORIGINS = [
+    "https://wallet.allianza.tech",
+    "https://www.wallet.allianza.tech",
+    "https://allianza.tech",
+    "https://www.allianza.tech",
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175"
+]
+
 CORS(app, resources={
     r"/*": {
-        "origins": [
-            "https://allianza.tech",
-            "https://www.allianza.tech", 
-            "https://wallet.allianza.tech",
-            "https://www.wallet.allianza.tech",
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://localhost:3000",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-            "http://localhost:5175",
-            "http://127.0.0.1:5175"
-        ],
+        "origins": ALLOWED_ORIGINS,
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
         "allow_headers": [
             "Content-Type", 
@@ -117,7 +116,8 @@ CORS(app, resources={
             "Accept",
             "Origin",
             "Access-Control-Request-Method",
-            "Access-Control-Request-Headers"
+            "Access-Control-Request-Headers",
+            "X-Nowpayments-Ipn-Signature"
         ],
         "expose_headers": ["Content-Range", "X-Content-Range"],
         "supports_credentials": True,
@@ -129,22 +129,11 @@ CORS(app, resources={
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin', '')
-    allowed_origins = [
-        "https://allianza.tech",
-        "https://www.allianza.tech",
-        "https://wallet.allianza.tech", 
-        "https://www.wallet.allianza.tech",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174"
-    ]
     
-    if origin in allowed_origins:
+    if origin in ALLOWED_ORIGINS:
         response.headers.add('Access-Control-Allow-Origin', origin)
     
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers,X-Nowpayments-Ipn-Signature')
     response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD')
     response.headers.add('Access-Control-Allow-Credentials', 'true')
     response.headers.add('Access-Control-Max-Age', '3600')
@@ -166,30 +155,45 @@ def after_request(response):
 @app.route('/api/staking/me', methods=['OPTIONS'])
 @app.route('/api/staking/options', methods=['OPTIONS'])
 @app.route('/api/staking/history', methods=['OPTIONS'])
+@app.route('/register', methods=['OPTIONS'])
+@app.route('/login', methods=['OPTIONS'])
+@app.route('/first-time-setup', methods=['OPTIONS'])
+@app.route('/check-user', methods=['OPTIONS'])
+@app.route('/balances/me', methods=['OPTIONS'])
+@app.route('/ledger/history', methods=['OPTIONS'])
+@app.route('/auth/me', methods=['OPTIONS'])
+@app.route('/transfers/internal', methods=['OPTIONS'])
+@app.route('/transfers/validate-address', methods=['OPTIONS'])
+@app.route('/withdrawals/request', methods=['OPTIONS'])
+@app.route('/withdrawals/history', methods=['OPTIONS'])
+@app.route('/purchase', methods=['OPTIONS'])
 def options_handler():
     return '', 200
 
-# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO (CORRIGIDO)
+# 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD_1', 'CdE25$$$')
 ADMIN_USERS = {
     'admin': ADMIN_PASSWORD,
 }
 
-# ✅ TOKEN CORRETO - PRODUÇÃO (FORCE O TOKEN CORRETO)
+# ✅ TOKEN CORRETO - PRODUÇÃO
 ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza-prod')
-SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTERES
+SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'
 
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
 
-# ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE (CORRIGIDO)
+# ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE
 print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
 print(f"🔑 SITE_ADMIN_TOKEN: '{SITE_ADMIN_TOKEN}'")
 print(f"📏 Comprimento: {len(SITE_ADMIN_TOKEN)}")
 print(f"🔐 ADMIN_JWT_SECRET: '{ADMIN_JWT_SECRET}'")
 print(f"👤 ADMIN_PASSWORD: '{ADMIN_PASSWORD}'")
 print(f"🔗 NOWPAYMENTS_IPN_SECRET: '{NOWPAYMENTS_IPN_SECRET}' ({len(NOWPAYMENTS_IPN_SECRET)} chars)")
+print("🌐 DOMÍNIOS PERMITIDOS:")
+for origin in ALLOWED_ORIGINS:
+    print(f"   ✅ {origin}")
 print("=" * 60)
 
 # Inicializa o banco de dados
@@ -600,7 +604,7 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE (ATUALIZADA COM COMPENSAÇÃO)
+# 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE
 def process_automatic_payment(email, amount, method, external_id):
     """Processar pagamento automaticamente e creditar tokens COM COMPENSAÇÃO DE TAXAS"""
     conn = get_db_connection()
@@ -701,44 +705,6 @@ def process_automatic_payment(email, amount, method, external_id):
     finally:
         conn.close()
 
-# 🔄 FUNÇÃO PARA COMPENSAR TAXAS MANUALMENTE
-def compensate_fees_manually(email, original_amount, received_amount):
-    """Compensar taxas manualmente para garantir valor completo"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Buscar usuário
-        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        if user and original_amount > received_amount:
-            # Calcular diferença
-            difference = original_amount - received_amount
-            
-            # Creditar a diferença
-            cursor.execute(
-                "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                (difference, user['id'])
-            )
-            
-            # Registrar no ledger
-            cursor.execute(
-                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                (user['id'], 'ALZ', difference, 'fee_compensation', '🎁 Compensação manual de taxas - Valor Completo')
-            )
-            
-            conn.commit()
-            print(f"✅ Taxas compensadas manualmente para {email}: +{difference} ALZ")
-            return difference
-        
-    except Exception as e:
-        print(f"❌ Erro ao compensar taxas manualmente: {e}")
-    finally:
-        if 'conn' in locals():
-            conn.close()
-    return 0
-
 # ✅ VALIDAÇÃO DE VALOR MÍNIMO PARA CRIPTO
 def validate_crypto_minimum_amount(amount_brl):
     """Validar valor mínimo para pagamentos em cripto"""
@@ -756,7 +722,6 @@ def debug_token():
     print(f"📨 Método: {request.method}")
     print(f"📨 Header Authorization: {auth_header}")
     print(f"🌐 Origin: {request.headers.get('Origin')}")
-    print(f"🌐 Host: {request.headers.get('Host')}")
     
     if not auth_header.startswith('Bearer '):
         print("❌ Header não começa com Bearer")
@@ -774,16 +739,8 @@ def debug_token():
     print(f"📏 Comprimento esperado: {len(expected_token)}")
     print(f"✅ Tokens são iguais? {admin_token == expected_token}")
     
-    # Verificação caractere por caractere
     if admin_token != expected_token:
         print("❌ Tokens não coincidem!")
-        print("🔍 Comparação caractere por caractere:")
-        max_len = max(len(admin_token), len(expected_token))
-        for i in range(max_len):
-            char_rec = admin_token[i] if i < len(admin_token) else '❌ FIM'
-            char_exp = expected_token[i] if i < len(expected_token) else '❌ FIM'
-            match = "✅" if char_rec == char_exp else "❌"
-            print(f"   Posição {i}: '{char_rec}' {match} '{char_exp}'")
     
     print("🔐 DEBUG TOKEN - FIM")
     print("=" * 60)
@@ -793,8 +750,7 @@ def debug_token():
             "success": True,
             "message": "Token válido!",
             "token_length": len(admin_token),
-            "token_match": True,
-            "backend_token_preview": f"{expected_token[:10]}...{expected_token[-4:]}"
+            "token_match": True
         }), 200
     else:
         return jsonify({
@@ -1063,7 +1019,7 @@ def stripe_webhook():
         print(f"❌ Erro webhook Stripe PRODUÇÃO: {e}")
         return jsonify({'error': str(e)}), 400
 
-# ✅ FUNÇÃO PARA VERIFICAR ASSINATURA NOWPAYMENTS (CORRIGIDA)
+# ✅ FUNÇÃO PARA VERIFICAR ASSINATURA NOWPAYMENTS
 def verify_nowpayments_signature(payload_bytes, received_signature):
     """Verificar assinatura NowPayments CORRETAMENTE"""
     try:
@@ -1087,7 +1043,7 @@ def verify_nowpayments_signature(payload_bytes, received_signature):
         print(f"❌ Erro verificação assinatura: {e}")
         return False
 
-# ✅ FUNÇÃO PARA EXTRAIR DADOS NOWPAYMENTS (CORRIGIDA)
+# ✅ FUNÇÃO PARA EXTRAIR DADOS NOWPAYMENTS
 def extract_nowpayments_data(data):
     """Extrai dados CORRETAMENTE do payload NowPayments"""
     try:
@@ -1143,7 +1099,7 @@ def extract_email_from_string(text):
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', str(text))
     return email_match.group() if email_match else None
 
-# ✅ WEBHOOK NOWPAYMENTS CORRIGIDO - URL COMPLETA
+# ✅ WEBHOOK NOWPAYMENTS CORRIGIDO
 @app.route('/webhook/nowpayments', methods=['POST', 'GET'])
 def nowpayments_webhook():
     """Webhook NowPayments - URL CORRETA: /webhook/nowpayments"""
@@ -1157,7 +1113,7 @@ def nowpayments_webhook():
             return jsonify({
                 "status": "active", 
                 "message": "NowPayments webhook está operacional",
-                "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+                "webhook_url": "https://api.allianza.tech/webhook/nowpayments",
                 "method": "POST",
                 "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET),
                 "timestamp": datetime.now().isoformat()
@@ -1273,11 +1229,11 @@ def nowpayments_diagnostic():
         'nowpayments_configured': bool(NOWPAYMENTS_IPN_SECRET),
         'ipn_secret_length': len(NOWPAYMENTS_IPN_SECRET),
         'required_secret_length': 64,
-        'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
+        'webhook_url': 'https://api.allianza.tech/webhook/nowpayments',
         'status': 'OPERATIONAL' if len(NOWPAYMENTS_IPN_SECRET) >= 32 else 'CONFIGURATION_ERROR',
         'fix_required': len(NOWPAYMENTS_IPN_SECRET) < 32,
         'setup_instructions': {
-            'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
+            'webhook_url': 'https://api.allianza.tech/webhook/nowpayments',
             'ipn_secret': NOWPAYMENTS_IPN_SECRET,
             'note': 'Configure no painel NowPayments em Payment flow customization -> Instant payment notifications'
         }
@@ -1312,8 +1268,7 @@ def test_nowpayments_signature():
         'headers_required': {
             'Content-Type': 'application/json',
             'x-nowpayments-ipn-signature': signature
-        },
-        'curl_test_command': f'curl -X POST https://allianza-wallet-backend.onrender.com/webhook/nowpayments -H "Content-Type: application/json" -H "x-nowpayments-ipn-signature: {signature}" -d \'{json.dumps(test_data)}\''
+        }
     })
 
 # 🔑 Login Admin - PRODUÇÃO
@@ -1433,7 +1388,7 @@ def site_process_purchase():
     finally:
         conn.close()
 
-# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
+# 🔄 Rota para Admin do Site - PRODUÇÃO
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
     """Listar pagamentos para o admin do site - PRODUÇÃO"""
@@ -1461,10 +1416,6 @@ def site_admin_payments():
             
         if admin_token != expected_token:
             print("❌ Tokens não coincidem!")
-            print(f"   Recebido: '{admin_token}'")
-            print(f"   Esperado: '{expected_token}'")
-            print(f"   Comprimento recebido: {len(admin_token)}")
-            print(f"   Comprimento esperado: {len(expected_token)}")
             return jsonify({"error": "Token inválido"}), 401
         
         print("✅ Token válido! Processando requisição...")
@@ -1883,7 +1834,7 @@ def check_user():
     finally:
         conn.close()
 
-# ✅ ROTA DE HEALTH CHECK - PRODUÇÃO (ATUALIZADA)
+# ✅ ROTA DE HEALTH CHECK - PRODUÇÃO
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
@@ -1895,17 +1846,13 @@ def health_check():
         "stripe_available": STRIPE_AVAILABLE,
         "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
         "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET),
-        "nowpayments_webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+        "nowpayments_webhook_url": "https://api.allianza.tech/webhook/nowpayments",
         "nowpayments_status": "ACTIVE" if NOWPAYMENTS_IPN_SECRET else "INACTIVE",
         "staking_enabled": True,
-        "staking_features": {
-            "penalties": True,
-            "auto_compound": True,
-            "rewards_calculation": True
-        }
+        "cors_domains": ALLOWED_ORIGINS
     }), 200
 
-# ✅ Rota para informações do sistema - PRODUÇÃO (ATUALIZADA)
+# ✅ Rota para informações do sistema - PRODUÇÃO
 @app.route('/system/info', methods=['GET'])
 def system_info():
     return jsonify({
@@ -1933,14 +1880,7 @@ def system_info():
             "options": "/api/staking/options",
             "history": "/api/staking/history"
         },
-        "cors_domains": [
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-            "https://allianza.tech", 
-            "https://wallet.allianza.tech"
-        ]
+        "cors_domains": ALLOWED_ORIGINS
     }), 200
 
 # ✅ ENDPOINT DE DIAGNÓSTICO STRIPE - PRODUÇÃO
@@ -2040,12 +1980,134 @@ def get_ledger_history():
         if 'conn' in locals():
             conn.close()
 
+# ✅ ROTA PARA DADOS DO USUÁRIO
+@app.route('/auth/me', methods=['GET'])
+def get_auth_me():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization token is missing or invalid"}), 401
+
+        token = auth_header.split(" ")[1]
+        user_id = get_user_id_from_token_wallet(token)
+
+        if not user_id:
+            return jsonify({"error": "Invalid authentication token"}), 401
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT id, email, nickname, wallet_address FROM users WHERE id = %s", (user_id,))
+        user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        return jsonify({
+            "user": dict(user)
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao buscar dados do usuário: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+# ✅ ROTA PARA TRANSFERÊNCIAS INTERNAS
+@app.route('/transfers/internal', methods=['POST'])
+def transfers_internal():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization token is missing or invalid"}), 401
+
+        token = auth_header.split(" ")[1]
+        user_id = get_user_id_from_token_wallet(token)
+
+        if not user_id:
+            return jsonify({"error": "Invalid authentication token"}), 401
+
+        data = request.json
+        to_identifier = data.get('to_identifier')
+        amount = float(data.get('amount', 0))
+        description = data.get('description', '')
+
+        if not to_identifier or amount <= 0:
+            return jsonify({"error": "Destinatário e valor são obrigatórios"}), 400
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("BEGIN")
+
+            # Verificar saldo do remetente
+            cursor.execute("SELECT available FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user_id,))
+            sender_balance = cursor.fetchone()
+            
+            if not sender_balance or sender_balance['available'] < amount:
+                return jsonify({"error": "Saldo insuficiente"}), 400
+
+            # Buscar destinatário por email ou wallet address
+            cursor.execute("SELECT id FROM users WHERE email = %s OR wallet_address = %s", (to_identifier, to_identifier))
+            receiver = cursor.fetchone()
+            
+            if not receiver:
+                return jsonify({"error": "Destinatário não encontrado"}), 404
+
+            receiver_id = receiver['id']
+
+            # Debitar do remetente
+            cursor.execute(
+                "UPDATE balances SET available = available - %s WHERE user_id = %s AND asset = 'ALZ'",
+                (amount, user_id)
+            )
+
+            # Creditar no destinatário
+            cursor.execute(
+                "UPDATE balances SET available = available + %s WHERE user_id = %s AND asset = 'ALZ'",
+                (amount, receiver_id)
+            )
+
+            # Registrar no ledger do remetente
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, 'ALZ', -amount, 'transfer_out', f'Transferência para {to_identifier}: {description}')
+            )
+
+            # Registrar no ledger do destinatário
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
+                (receiver_id, 'ALZ', amount, 'transfer_in', f'Transferência de user_{user_id}: {description}')
+            )
+
+            conn.commit()
+
+            return jsonify({
+                "success": True,
+                "message": "Transferência realizada com sucesso",
+                "amount": amount,
+                "to_user_id": receiver_id
+            }), 200
+
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro na transferência interna: {e}")
+            return jsonify({"error": f"Erro na transferência: {str(e)}"}), 500
+        finally:
+            conn.close()
+
+    except Exception as e:
+        print(f"❌ Erro geral em transfers/internal: {e}")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
     print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND - PRODUÇÃO")
     print("=" * 60)
     print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
     print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
-    print(f"🔗 NowPayments Webhook: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
+    print(f"🔗 NowPayments Webhook: https://api.allianza.tech/webhook/nowpayments")
     print(f"🔑 NowPayments IPN Secret: {NOWPAYMENTS_IPN_SECRET[:8]}... ({len(NOWPAYMENTS_IPN_SECRET)} chars)")
     
     if STRIPE_AVAILABLE:
@@ -2056,36 +2118,9 @@ if __name__ == "__main__":
     print("🎁 SISTEMA CONFIGURADO COM TRANSFERÊNCIAS GRATUITAS")
     print("💸 Compensação automática de 2% para pagamentos cripto")
     print("🔄 STAKING COMPLETO COM PENALIDADES DE 5%")
-    print("🌐 Rotas públicas:")
-    print("   - GET  /health")
-    print("   - GET  /system/info") 
-    print("   - POST /api/site/purchase")
-    print("   - POST /register, /login, /first-time-setup, /check-user")
-    print("   - POST /create-checkout-session")
-    print("   - GET  /debug/stripe")
-    print("   - POST /api/site/admin/manual-token-send")
-    print("   - GET  /api/site/admin/debug-token")
-    print("🔗 NowPayments:")
-    print("   - POST /webhook/nowpayments")
-    print("   - GET  /api/nowpayments/diagnostic")
-    print("   - GET  /api/nowpayments/test-signature")
-    print("🔄 Staking Routes:")
-    print("   - POST /api/staking/stake")
-    print("   - POST /api/staking/unstake (5% penalidade antecipada)")
-    print("   - POST /api/staking/claim-rewards")
-    print("   - GET  /api/staking/me")
-    print("   - GET  /api/staking/options")
-    print("   - GET  /api/staking/history")
-    print("🔐 Rotas admin (requer token):")
-    print("   - GET  /api/site/admin/payments")
-    print("   - GET  /api/site/admin/stats")
-    print("   - POST /api/site/admin/process-payments")
-    print("📞 Webhooks:")
-    print("   - POST /webhook/stripe")
-    print("   - POST /webhook/nowpayments")
-    print("💰 Rotas protegidas:")
-    print("   - GET  /balances/me")
-    print("   - GET  /ledger/history")
+    print("🌐 CORS CONFIGURADO PARA:")
+    for origin in ALLOWED_ORIGINS:
+        print(f"   ✅ {origin}")
     print("=" * 60)
     
     try:
