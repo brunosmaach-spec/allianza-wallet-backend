@@ -11,6 +11,7 @@ from functools import wraps
 import hmac
 import hashlib
 import secrets
+import json
 
 # ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO
 from dotenv import load_dotenv
@@ -18,11 +19,16 @@ load_dotenv()
 
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
-print("✅ NOWPAYMENTS CORRIGIDO - WEBHOOK URL COMPLETA")
+print("✅ NOWPAYMENTS CORRIGIDO - VARIÁVEIS DE AMBIENTE")
 print("=" * 60)
-print(f"🔑 SITE_ADMIN_TOKEN: {os.getenv('SITE_ADMIN_TOKEN', 'NÃO ENCONTRADO')}")
+
+# ✅ CONFIGURAÇÃO NOWPAYMENTS COM FALLBACK
+NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
+
+print(f"🔑 NOWPAYMENTS_IPN_SECRET: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '⚠️ USANDO FALLBACK'}")
+print(f"📏 Comprimento: {len(NOWPAYMENTS_IPN_SECRET)} caracteres")
+print(f"🔗 Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
-print(f"🔗 NOWPAYMENTS_IPN: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '❌ NÃO ENCONTRADO'}")
 print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
 print("=" * 60)
 
@@ -161,7 +167,9 @@ def after_request(response):
 @app.route('/api/site/admin/debug-token', methods=['OPTIONS'])
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
-@app.route('/webhook/nowpayments', methods=['OPTIONS'])  # ✅ NOVO: NowPayments CORS
+@app.route('/webhook/nowpayments', methods=['OPTIONS'])
+@app.route('/api/nowpayments/check-config', methods=['OPTIONS'])  # ✅ NOVO
+@app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])  # ✅ NOVO
 
 def options_handler():
     return '', 200
@@ -178,7 +186,6 @@ SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTER
 
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
-NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
 
 # ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE (CORRIGIDO)
 print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
@@ -354,6 +361,86 @@ def compensate_fees_manually(email, original_amount, received_amount):
         if 'conn' in locals():
             conn.close()
     return 0
+
+# ✅ ROTA PÚBLICA PARA VERIFICAR CONFIGURAÇÃO NOWPAYMENTS
+@app.route('/api/nowpayments/check-config', methods=['GET'])
+def check_nowpayments_config():
+    """Verificar configuração NowPayments - ROTA PÚBLICA"""
+    ipn_secret_from_env = os.getenv('NOWPAYMENTS_IPN_SECRET')
+    current_ipn_secret = NOWPAYMENTS_IPN_SECRET
+    
+    return jsonify({
+        'nowpayments_configured': bool(ipn_secret_from_env),
+        'ipn_secret_from_env': bool(ipn_secret_from_env),
+        'ipn_secret_length': len(current_ipn_secret) if current_ipn_secret else 0,
+        'ipn_secret_preview': current_ipn_secret[:8] + '...' + current_ipn_secret[-4:] if current_ipn_secret else 'NOT_SET',
+        'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
+        'status': 'READY' if ipn_secret_from_env else 'MISSING_ENV_VAR',
+        'environment_variables': {
+            'NOWPAYMENTS_IPN_SECRET_set': bool(ipn_secret_from_env),
+            'STRIPE_SECRET_KEY_set': bool(os.getenv('STRIPE_SECRET_KEY')),
+            'NEON_DATABASE_URL_set': bool(os.getenv('NEON_DATABASE_URL')),
+            'SITE_ADMIN_TOKEN_set': bool(os.getenv('SITE_ADMIN_TOKEN'))
+        },
+        'setup_instructions': 'Adicione NOWPAYMENTS_IPN_SECRET no Render Dashboard'
+    })
+
+# ✅ TESTE MANUAL DO WEBHOOK NOWPAYMENTS
+@app.route('/api/nowpayments/test-webhook', methods=['POST', 'GET'])
+def test_nowpayments_webhook():
+    """Testar manualmente o webhook da NowPayments"""
+    try:
+        # Simular payload de teste
+        test_payload = {
+            "payment_id": "test_payment_" + str(int(time.time())),
+            "payment_status": "finished",
+            "pay_amount": 50.0,
+            "actually_paid": 50.0,
+            "pay_currency": "usdt",
+            "price_amount": 50.0,
+            "price_currency": "brl",
+            "order_id": "test_order_" + str(int(time.time())),
+            "order_description": "Compra de 500 ALZ",
+            "customer_email": "test@allianza.tech",
+            "ipn_type": "payment"
+        }
+        
+        # Gerar assinatura
+        payload_bytes = json.dumps(test_payload).encode('utf-8')
+        signature = hmac.new(
+            key=NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
+            msg=payload_bytes,
+            digestmod=hashlib.sha512
+        ).hexdigest()
+        
+        print(f"🔐 Assinatura gerada: {signature}")
+        
+        # Fazer requisição para o próprio webhook
+        headers = {
+            'Content-Type': 'application/json',
+            'x-nowpayments-ipn-signature': signature
+        }
+        
+        webhook_url = 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments'
+        
+        response = requests.post(
+            webhook_url,
+            json=test_payload,
+            headers=headers,
+            timeout=30
+        )
+        
+        return jsonify({
+            'test_status': 'sent',
+            'response_status': response.status_code,
+            'response_text': response.text,
+            'signature_used': signature,
+            'webhook_url': webhook_url,
+            'test_payload': test_payload
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # ✅ ROTA DE DEBUG PARA VERIFICAR TOKEN
 @app.route('/api/site/admin/debug-token', methods=['GET', 'POST'])
@@ -875,57 +962,6 @@ def log_payment_failure(payment_id, data, status):
     except Exception as e:
         print(f"❌ Erro ao registrar falha: {e}")
 
-# ✅ ENDPOINT DE DIAGNÓSTICO NOWPAYMENTS
-@app.route('/api/nowpayments/diagnostic', methods=['GET'])
-def nowpayments_diagnostic():
-    """Diagnóstico completo da NowPayments"""
-    return jsonify({
-        'nowpayments_configured': bool(NOWPAYMENTS_IPN_SECRET),
-        'ipn_secret_length': len(NOWPAYMENTS_IPN_SECRET),
-        'required_secret_length': 64,
-        'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
-        'status': 'OPERATIONAL' if len(NOWPAYMENTS_IPN_SECRET) >= 32 else 'CONFIGURATION_ERROR',
-        'fix_required': len(NOWPAYMENTS_IPN_SECRET) < 32,
-        'setup_instructions': {
-            'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
-            'ipn_secret': NOWPAYMENTS_IPN_SECRET,
-            'note': 'Configure no painel NowPayments em Payment flow customization -> Instant payment notifications'
-        }
-    })
-
-# ✅ TESTE DE ASSINATURA NOWPAYMENTS
-@app.route('/api/nowpayments/test-signature', methods=['GET', 'POST'])
-def test_nowpayments_signature():
-    """Testar geração de assinatura"""
-    test_data = {
-        "payment_id": "test_123456789",
-        "payment_status": "finished", 
-        "pay_amount": 100.0,
-        "actually_paid": 100.0,
-        "pay_currency": "usdt",
-        "customer_email": "test@allianza.tech"
-    }
-    
-    payload_bytes = json.dumps(test_data).encode('utf-8')
-    signature = hmac.new(
-        key=NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
-        msg=payload_bytes,
-        digestmod=hashlib.sha512
-    ).hexdigest()
-    
-    return jsonify({
-        'test_payload': test_data,
-        'generated_signature': signature,
-        'ipn_secret_preview': NOWPAYMENTS_IPN_SECRET[:8] + '...' + NOWPAYMENTS_IPN_SECRET[-8:],
-        'signature_length': len(signature),
-        'verification_url': '/webhook/nowpayments',
-        'headers_required': {
-            'Content-Type': 'application/json',
-            'x-nowpayments-ipn-signature': signature
-        },
-        'curl_test_command': f'curl -X POST https://allianza-wallet-backend.onrender.com/webhook/nowpayments -H "Content-Type: application/json" -H "x-nowpayments-ipn-signature: {signature}" -d \'{json.dumps(test_data)}\''
-    })
-
 # 🔑 Login Admin - PRODUÇÃO
 @app.route('/admin/login', methods=['POST'])
 def admin_login():
@@ -1252,8 +1288,6 @@ def site_admin_process_payments():
 
 # ===== ROTAS EXISTENTES DA WALLET =====
 
-
-
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 def get_user_id_from_token(token):
     try:
@@ -1280,9 +1314,8 @@ def authenticate_request():
         "/admin/login",
         "/debug/stripe",
         "/api/site/admin/debug-token",
-        "/api/nowpayments/diagnostic",  # ✅ NOVO
-        "/api/nowpayments/test-signature",  # ✅ NOVO
-
+        "/api/nowpayments/check-config",  # ✅ NOVO - ROTA PÚBLICA
+        "/api/nowpayments/test-webhook",  # ✅ NOVO - ROTA PÚBLICA
     ]
     
     if request.path.startswith("/api/site/admin") or request.path == "/health":
@@ -1655,10 +1688,10 @@ if __name__ == "__main__":
     print("   - GET  /debug/stripe")
     print("   - POST /api/site/admin/manual-token-send")
     print("   - GET  /api/site/admin/debug-token")
-    print("🔗 NowPayments:")
+    print("🔗 NowPayments (PÚBLICAS):")
+    print("   - GET  /api/nowpayments/check-config")
+    print("   - POST /api/nowpayments/test-webhook")
     print("   - POST /webhook/nowpayments")
-    print("   - GET  /api/nowpayments/diagnostic")
-    print("   - GET  /api/nowpayments/test-signature")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
