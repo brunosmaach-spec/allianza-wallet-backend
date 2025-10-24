@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO E CORRIGIDO)
+# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -24,10 +24,8 @@ print("=" * 60)
 
 # ✅ CONFIGURAÇÃO NOWPAYMENTS COM FALLBACK
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
-NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY', 'HC6XC82-E0FMRHT-GAXPSDY-AH54Y10') # Carregando a chave de API para criação de fatura
 
 print(f"🔑 NOWPAYMENTS_IPN_SECRET: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '⚠️ USANDO FALLBACK'}")
-print(f"🔑 NOWPAYMENTS_API_KEY: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_API_KEY') else '⚠️ USANDO FALLBACK'}")
 print(f"📏 Comprimento: {len(NOWPAYMENTS_IPN_SECRET)} caracteres")
 print(f"🔗 Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments" )
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
@@ -77,7 +75,7 @@ if STRIPE_AVAILABLE:
             if stripe_secret_key.startswith('sk_live_'):
                 print("🎉 STRIPE EM MODO PRODUÇÃO! Pagamentos reais ativados!")
             else:
-                print("🔒 STRIPE EM MODO TESTE")
+                print("🔧 STRIPE EM MODO TESTE")
             print("📦 Versão Stripe: 8.0.0")
         else:
             print("❌ STRIPE_SECRET_KEY não encontrada")
@@ -86,7 +84,7 @@ if STRIPE_AVAILABLE:
         print(f"❌ Erro configuração Stripe: {e}")
         STRIPE_AVAILABLE = False
 else:
-    print("⚠️ STRIPE NÃO DISPONÍVEL - Pagamentos com cartão desativados")
+    print("🔴 STRIPE NÃO DISPONÍVEL - Pagamentos com cartão desativados")
 
 # Importar funções do banco
 try:
@@ -103,26 +101,63 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CONFIGURAÇÃO CORS CORRIGIDA (SOLUÇÃO DEFINITIVA)
-CORS(app, resources={r"/*": {
-    "origins": [
-        "https://allianza.tech",        # site oficial
-        "http://localhost:5174"         # ambiente local (para testes)
-    ],
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-    "allow_headers": [
-        "Content-Type", 
-        "Authorization", 
-        "X-Requested-With",
-        "Accept",
-        "Origin",
-        "Access-Control-Request-Method",
-        "Access-Control-Request-Headers"
-    ],
-    "expose_headers": ["Content-Range", "X-Content-Range"],
-    "supports_credentials": True,
-    "max_age": 3600
-}})
+# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO
+CORS(app, resources={
+    r"/*": {
+        "origins": [
+            "https://allianza.tech",
+            "https://www.allianza.tech", 
+            "https://wallet.allianza.tech",
+            "https://www.wallet.allianza.tech",
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://localhost:3000",
+            "http://127.0.0.1:5173",
+            "http://127.0.0.1:5174",
+            "http://localhost:5175",
+            "http://127.0.0.1:5175"
+        ],
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+        "allow_headers": [
+            "Content-Type", 
+            "Authorization", 
+            "X-Requested-With",
+            "Accept",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers"
+        ],
+        "expose_headers": ["Content-Range", "X-Content-Range"],
+        "supports_credentials": True,
+        "max_age": 3600
+    }
+} )
+
+# ✅ MIDDLEWARE CORS MANUAL PARA GARANTIR
+@app.after_request
+def after_request(response):
+    origin = request.headers.get('Origin', '')
+    allowed_origins = [
+        "https://allianza.tech",
+        "https://www.allianza.tech",
+        "https://wallet.allianza.tech", 
+        "https://www.wallet.allianza.tech",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174"
+    ]
+    
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin )
+    
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    response.headers.add('Access-Control-Max-Age', '3600')
+    
+    return response
 
 # ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
 @app.route('/api/site/admin/payments', methods=['OPTIONS'])
@@ -189,51 +224,6 @@ def admin_required(f):
     return decorated_function
 
 # 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE (ATUALIZADA COM COMPENSAÇÃO)
-def verify_nowpayments_signature(payload_bytes, received_signature):
-    """Verifica a assinatura do webhook NowPayments (IPN)"""
-    NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET')
-    
-    if not NOWPAYMENTS_IPN_SECRET:
-        print("❌ NOWPAYMENTS_IPN_SECRET não configurada para verificação")
-        return False
-        
-    # Calcular a assinatura
-    calculated_signature = hmac.new(
-        NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
-        payload_bytes,
-        hashlib.sha512
-    ).hexdigest()
-    
-    # Comparar com a assinatura recebida
-    return hmac.compare_digest(calculated_signature, received_signature)
-
-def extract_nowpayments_data(data):
-    """Extrai e valida os dados essenciais do payload NowPayments"""
-    
-    required_fields = ['payment_status', 'pay_address', 'price_amount', 'price_currency', 'order_id', 'extra_id']
-    if not all(field in data for field in required_fields):
-        print(f"❌ Payload NowPayments incompleto. Campos esperados: {required_fields}")
-        return None
-        
-    # O campo 'extra_id' é usado para o email do usuário
-    email = data.get('extra_id')
-    
-    # O campo 'order_id' é o ID do pagamento no seu DB
-    payment_id = data.get('order_id')
-    
-    # O campo 'price_amount' é o valor original da fatura (em USD)
-    amount = data.get('price_amount')
-    currency = data.get('price_currency')
-    
-    return {
-        'payment_status': data.get('payment_status'),
-        'email': email,
-        'amount': amount,
-        'currency': currency,
-        'payment_id': payment_id,
-        'tx_hash': data.get('pay_address') # Usando o pay_address como tx_hash temporário
-    }
-
 def process_automatic_payment(email, amount, method, external_id):
     """Processar pagamento automaticamente e creditar tokens COM COMPENSAÇÃO DE TAXAS"""
     conn = get_db_connection()
@@ -313,9 +303,9 @@ def process_automatic_payment(email, amount, method, external_id):
             )
             cursor.execute(
                 "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (user_id, 'ALZ', bonus_amount, 'fee_compensation', payment_id, '🎉 Bônus compensação de taxa crypto', f'fee_comp_{payment_id}')
+                (user_id, 'ALZ', bonus_amount, 'fee_compensation', payment_id, '🎁 Bônus compensação de taxa crypto', f'fee_comp_{payment_id}')
             )
-            print(f"🎉 Bônus aplicado para {email}: +{bonus_amount} ALZ")
+            print(f"🎁 Bônus aplicado para {email}: +{bonus_amount} ALZ")
 
         cursor.execute("COMMIT")
         return {"success": True, "user_created": user_created, "wallet_address": wallet_address}
@@ -442,103 +432,7 @@ def site_purchase():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
-
-# 💰 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO (APENAS UMA VEZ)
-@app.route('/api/nowpayments/create-invoice', methods=['POST'])
-def create_nowpayments_invoice():
-    """Cria uma fatura no NowPayments e retorna o link de pagamento."""
-    
-    NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
-    
-    if not NOWPAYMENTS_API_KEY:
-        print("❌ NOWPAYMENTS_API_KEY não configurada")
-        return jsonify({"error": "Configuração NowPayments ausente"}), 500
-        
-    try:
-        data = request.json
-        payment_id = data.get('payment_id')
-        amount_usd_str = data.get('amount_usd')
-        email = data.get('email')
-        
-        if not payment_id or not amount_usd_str or not email:
-            return jsonify({"error": "payment_id, amount_usd e email são obrigatórios"}), 400
-            
-        try:
-            # Conversão explícita para float para garantir o formato correto
-            # O frontend já garante que o valor é uma string com 2 casas decimais.
-            amount_usd = float(amount_usd_str)
-        except ValueError:
-            print(f"❌ Erro de conversão: amount_usd_str='{amount_usd_str}' não é um número válido.")
-            return jsonify({"error": "Valor de USD inválido"}), 400
-            
-        # 1. Obter o IPN Secret (não é necessário para a criação da fatura, mas bom ter)
-        # O NOWPAYMENTS_API_KEY já foi carregado no escopo global
-        
-        # 2. Chamar a API do NowPayments
-        headers = {
-            'x-api-key': NOWPAYMENTS_API_KEY,
-            'Content-Type': 'application/json'
-        }
-        
-        # O NowPayments espera o valor em USD para a fatura
-        payload = {
-            "price_amount": amount_usd,
-            "price_currency": "usd",
-            "pay_currency": "btc", # Deixar o NowPayments escolher a melhor
-            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
-            "order_id": str(payment_id),
-            "order_description": f"Compra de ALZ por {email} - ID: {payment_id}",
-            "success_url": "https://allianza.tech/success",
-            "cancel_url": "https://allianza.tech/cancel",
-            "payout_address": None, # Pagamento direto para a conta NowPayments
-            "payout_currency": None,
-            "extra_id": email
-        }
-        
-        NOWPAYMENTS_URL = "https://api.nowpayments.io/v1/invoice"
-        
-        print(f"🔄 Enviando requisição NowPayments para {NOWPAYMENTS_URL}...")
-        print(f"DEBUG PAYLOAD: {payload}") # Log do payload
-        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload)
-        
-        if response.status_code != 201:
-            print(f"❌ Erro NowPayments: Status {response.status_code} - {response.text}")
-            return jsonify({"error": "Falha ao criar fatura NowPayments", "details": response.json()}), 500
-            
-        invoice_data = response.json()
-        
-        # 3. Atualizar o registro de pagamento com os dados da fatura
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("BEGIN")
-            
-            # O metadata é atualizado com || para preservar dados anteriores (como alz_amount)
-            cursor.execute(
-                "UPDATE payments SET method = %s, metadata = metadata || %s WHERE id = %s",
-                ('nowpayments', json.dumps({"invoice_id": invoice_data.get('id'), "payment_url": invoice_data.get('invoice_url')}) , payment_id)
-            )
-            
-            conn.commit()
-            
-            return jsonify({
-                "success": True,
-                "invoice_url": invoice_data.get('invoice_url'),
-                "invoice_id": invoice_data.get('id'),
-                "payment_id": payment_id
-            }), 200
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ Erro ao atualizar pagamento com dados NowPayments: {e}")
-            return jsonify({"error": "Erro interno ao salvar dados da fatura"}), 500
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        print(f"❌ Erro geral ao criar fatura NowPayments: {e}")
-        return jsonify({"error": str(e)}), 500
+# Continuação do backend_wallet_integration.py
 
 # 💳 ROTA PARA CRIAR SESSÃO STRIPE - PRODUÇÃO
 @app.route('/create-checkout-session', methods=['POST'])
@@ -593,7 +487,7 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
-# 🙏 WEBHOOK STRIPE
+# 🎣 WEBHOOK STRIPE
 @app.route('/webhook/stripe', methods=['POST'])
 def stripe_webhook():
     """Receber eventos do Stripe"""
@@ -636,7 +530,7 @@ def stripe_webhook():
 
     return 'OK', 200
 
-# 🔍 FUNÇÕES AUXILIARES NOWPAYMENTS
+# 🔑 FUNÇÕES AUXILIARES NOWPAYMENTS
 def verify_nowpayments_signature(payload, signature):
     """Verifica a assinatura IPN da NowPayments"""
     if not signature:
@@ -732,7 +626,7 @@ def nowpayments_webhook():
         payload_bytes = request.get_data()
         received_signature = request.headers.get('x-nowpayments-ipn-signature')
         
-        print(f"📌 URL Recebida: {request.url}")
+        print(f"📍 URL Recebida: {request.url}")
         print(f"📧 Host: {request.headers.get('Host')}")
         print(f"🔑 Assinatura: {received_signature}")
         print(f"📦 Tamanho do payload: {len(payload_bytes)} bytes")
@@ -762,12 +656,6 @@ def nowpayments_webhook():
         email = payment_data['email']
         amount = payment_data['amount'] # Este é o valor em cripto (ex: BTC, USDT)
         payment_id = payment_data['payment_id']
-        tx_hash = payment_data['tx_hash'] # Novo campo
-        
-        print(f"📊 Status do pagamento: {payment_status}")
-        print(f"📧 Email identificado: {email}")
-        print(f"💰 Valor: {amount} ({payment_data['currency']})")
-        print(f"🔗 Tx Hash: {tx_hash}")
         
         print(f"📊 Status do pagamento: {payment_status}")
         print(f"📧 Email identificado: {email}")
@@ -824,7 +712,7 @@ def nowpayments_webhook():
                         # 4. Atualizar status do pagamento para 'completed'
                         cursor.execute(
                             "UPDATE payments SET status = 'completed', tx_hash = %s, processed_at = %s WHERE id = %s",
-                            (tx_hash, datetime.utcnow(), db_payment_id) # Usando tx_hash
+                            (payment_id, datetime.utcnow(), db_payment_id)
                         )
                         conn.commit()
                         print(f"🎉 Pagamento ID {db_payment_id} COMPLETED. {alz_amount_to_credit} ALZ creditados.")
@@ -838,7 +726,7 @@ def nowpayments_webhook():
                     # Outros status de progresso (sending, partially_paid)
                     cursor.execute(
                         "UPDATE payments SET status = %s, tx_hash = %s WHERE id = %s",
-                        (payment_status, tx_hash, db_payment_id) # Usando tx_hash
+                        (payment_status, payment_id, db_payment_id)
                     )
                     conn.commit()
                     print(f"🔄 Pagamento ID {db_payment_id} atualizado para status: {payment_status}")
@@ -848,10 +736,10 @@ def nowpayments_webhook():
                 # Statuses de falha
                 cursor.execute(
                     "UPDATE payments SET status = %s, tx_hash = %s WHERE id = %s",
-                    (payment_status, tx_hash, db_payment_id) # Usando tx_hash
+                    (payment_status, payment_id, db_payment_id)
                 )
                 conn.commit()
-                print(f"⚠️ Pagamento ID {db_payment_id} falhou/expirou. Status: {payment_status}")
+                print(f"🔴 Pagamento ID {db_payment_id} falhou/expirou. Status: {payment_status}")
                 return 'Payment failed', 200
             
             else:
@@ -913,8 +801,9 @@ def test_nowpayments_webhook():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+# Continuação do backend_wallet_integration.py
 
-# 🔧 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
+# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
     """Listar pagamentos para o admin do site - PRODUÇÃO"""
@@ -923,7 +812,7 @@ def site_admin_payments():
         
         print("=" * 50)
         print("🔐 ADMIN PAYMENTS - VERIFICAÇÃO DE TOKEN")
-        print(f"📞 Header: {auth_header}")
+        print(f"📨 Header: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
             print("❌ Header não começa com Bearer")
@@ -988,7 +877,7 @@ def site_admin_payments():
         if 'conn' in locals():
             conn.close()
 
-# 📊 Rota para estatísticas do admin do site - PRODUÇÃO
+# 🔄 Rota para estatísticas do admin do site - PRODUÇÃO
 @app.route('/api/site/admin/stats', methods=['GET'])
 def site_admin_stats():
     """Estatísticas para o admin do site - PRODUÇÃO"""
@@ -1117,9 +1006,9 @@ def site_admin_process_payments():
                         )
                         cursor.execute(
                             "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, related_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎉 Bônus compensação de taxa crypto', payment_id)
+                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎁 Bônus compensação de taxa crypto', payment_id)
                         )
-                        print(f"🎉 Bônus aplicado para {payment['email']}: +{bonus_amount} ALZ")
+                        print(f"🎁 Bônus aplicado para {payment['email']}: +{bonus_amount} ALZ")
                     
                     # Atualizar status
                     cursor.execute(
@@ -1151,7 +1040,7 @@ def site_admin_process_payments():
 
 # ===== ROTAS EXISTENTES DA WALLET =====
 
-# 🔧 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
+# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 def get_user_id_from_token(token):
     try:
         parts = token.split("_")
@@ -1160,6 +1049,7 @@ def get_user_id_from_token(token):
     except (ValueError, IndexError):
         pass
     return None
+# Continuação do backend_wallet_integration.py
 
 # 🔒 Middleware de Autenticação (aplicado globalmente, exceto para rotas públicas)
 @app.before_request
@@ -1307,7 +1197,7 @@ def login_user():
     finally:
         conn.close()
 
-# 🔄 ROTA DE SETUP INICIAL (PARA USUÁRIOS CRIADOS VIA COMPRA)
+# ⚙️ ROTA DE SETUP INICIAL (PARA USUÁRIOS CRIADOS VIA COMPRA)
 @app.route("/first-time-setup", methods=["POST"])
 def first_time_setup():
     data = request.json
@@ -1549,7 +1439,7 @@ if __name__ == '__main__':
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
     print("   - POST /api/site/admin/process-payments")
-    print("📡 Webhooks:")
+    print("📞 Webhooks:")
     print("   - POST /webhook/stripe")
     print("   - POST /webhook/nowpayments")
     print("💰 Rotas protegidas:")
