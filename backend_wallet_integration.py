@@ -24,10 +24,12 @@ print("=" * 60)
 
 # ✅ CONFIGURAÇÃO NOWPAYMENTS COM FALLBACK
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
+NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY', 'HC6XC82-E0FMRHT-GAXPSDY-AH54Y10') # Carregando a chave de API para criação de fatura
 
 print(f"🔑 NOWPAYMENTS_IPN_SECRET: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '⚠️ USANDO FALLBACK'}")
+print(f"🔑 NOWPAYMENTS_API_KEY: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_API_KEY') else '⚠️ USANDO FALLBACK'}")
 print(f"📏 Comprimento: {len(NOWPAYMENTS_IPN_SECRET)} caracteres")
-print(f"🔗 Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
+print(f"🔗 Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments" )
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
 print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
 print("=" * 60)
@@ -101,63 +103,41 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO
-CORS(app, resources={
-    r"/*": {
-        "origins": [
-            "https://allianza.tech",
-            "https://www.allianza.tech", 
-            "https://wallet.allianza.tech",
-            "https://www.wallet.allianza.tech",
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://localhost:3000",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-            "http://localhost:5175",
-            "http://127.0.0.1:5175"
-        ],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
-        "allow_headers": [
-            "Content-Type", 
-            "Authorization", 
-            "X-Requested-With",
-            "Accept",
-            "Origin",
-            "Access-Control-Request-Method",
-            "Access-Control-Request-Headers"
-        ],
-        "expose_headers": ["Content-Range", "X-Content-Range"],
-        "supports_credentials": True,
-        "max_age": 3600
-    }
-})
+# ✅ CONFIGURAÇÃO CORS CORRIGIDA (SOLUÇÃO DEFINITIVA)
+# Esta configuração substitui qualquer outra chamada CORS(app) e define as origens exatas.
+# O erro "The 'Access-Control-Allow-Origin' header contains multiple values" sugere que o Flask-CORS
+# está sendo chamado mais de uma vez ou que o ambiente de hospedagem (Render) está adicionando o cabeçalho
+# e o Flask-CORS está adicionando novamente.
+# A solução é garantir uma única chamada CORS(app) com a lista exata de origens permitidas.
+CORS(app, resources={r"/*": {
+    "origins": [
+        "https://allianza.tech",        # site oficial
+        "http://localhost:5174"         # ambiente local (para testes)
+    ],
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    "allow_headers": [
+        "Content-Type", 
+        "Authorization", 
+        "X-Requested-With",
+        "Accept",
+        "Origin",
+        "Access-Control-Request-Method",
+        "Access-Control-Request-Headers"
+    ],
+    "expose_headers": ["Content-Range", "X-Content-Range"],
+    "supports_credentials": True,
+    "max_age": 3600
+}})
 
-# ✅ MIDDLEWARE CORS MANUAL PARA GARANTIR
-@app.after_request
-def after_request(response):
-    origin = request.headers.get('Origin', '')
-    allowed_origins = [
-        "https://allianza.tech",
-        "https://www.allianza.tech",
-        "https://wallet.allianza.tech", 
-        "https://www.wallet.allianza.tech",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174"
-    ]
-    
-    if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    response.headers.add('Access-Control-Max-Age', '3600')
-    
-    return response
+# ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
+# As rotas OPTIONS abaixo estão corretas e não devem ser a causa da duplicação de cabeçalho.
+# O erro é: The 'Access-Control-Allow-Origin' header contains multiple values 'http://localhost:5174, http://localhost:5174', but only one is allowed.
+# Isso sugere que o cabeçalho está sendo adicionado duas vezes, e ambas as vezes com o valor 'http://localhost:5174'.
+# A duplicação pode estar vindo do ambiente de hospedagem (Render) ou de um middleware não visível.
+
+# ✅ VERIFICAR SE O PROBLEMA É NO NowPayments
+# O erro ocorre na rota '/api/nowpayments/create-invoice'. Vamos ler essa rota para ver se há algo que possa estar causando o problema.
+
 
 # ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
 @app.route('/api/site/admin/payments', methods=['OPTIONS'])
@@ -186,6 +166,8 @@ SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTER
 
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
+
+
 
 # ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE (CORRIGIDO)
 print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
@@ -224,6 +206,51 @@ def admin_required(f):
     return decorated_function
 
 # 🔄 FUNÇÃO PARA PROCESSAR PAGAMENTOS AUTOMATICAMENTE (ATUALIZADA COM COMPENSAÇÃO)
+def verify_nowpayments_signature(payload_bytes, received_signature):
+    """Verifica a assinatura do webhook NowPayments (IPN)"""
+    NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET')
+    
+    if not NOWPAYMENTS_IPN_SECRET:
+        print("❌ NOWPAYMENTS_IPN_SECRET não configurada para verificação")
+        return False
+        
+    # Calcular a assinatura
+    calculated_signature = hmac.new(
+        NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
+        payload_bytes,
+        hashlib.sha512
+    ).hexdigest()
+    
+    # Comparar com a assinatura recebida
+    return hmac.compare_digest(calculated_signature, received_signature)
+
+def extract_nowpayments_data(data):
+    """Extrai e valida os dados essenciais do payload NowPayments"""
+    
+    required_fields = ['payment_status', 'pay_address', 'price_amount', 'price_currency', 'order_id', 'extra_id']
+    if not all(field in data for field in required_fields):
+        print(f"❌ Payload NowPayments incompleto. Campos esperados: {required_fields}")
+        return None
+        
+    # O campo 'extra_id' é usado para o email do usuário
+    email = data.get('extra_id')
+    
+    # O campo 'order_id' é o ID do pagamento no seu DB
+    payment_id = data.get('order_id')
+    
+    # O campo 'price_amount' é o valor original da fatura (em USD)
+    amount = data.get('price_amount')
+    currency = data.get('price_currency')
+    
+    return {
+        'payment_status': data.get('payment_status'),
+        'email': email,
+        'amount': amount,
+        'currency': currency,
+        'payment_id': payment_id,
+        'tx_hash': data.get('pay_address') # Usando o pay_address como tx_hash temporário
+    }
+
 def process_automatic_payment(email, amount, method, external_id):
     """Processar pagamento automaticamente e creditar tokens COM COMPENSAÇÃO DE TAXAS"""
     conn = get_db_connection()
@@ -274,358 +301,262 @@ def process_automatic_payment(email, amount, method, external_id):
             )
             print(f"💰 Saldo criado para usuário {user_id}")
         
-        # Creditar tokens (VALOR COMPLETO)
+        # Creditar tokens no saldo
         cursor.execute(
-            "UPDATE balances SET available = available + %s WHERE user_id = %s",
+            "UPDATE balances SET available = available + %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
             (amount, user_id)
         )
-        print(f"💰 Tokens creditados: {amount} ALZ para {email}")
+        print(f"💰 Saldo atualizado: +{amount} ALZ para user {user_id}")
         
-        # Registrar no ledger
+        # Registrar entrada no ledger
         cursor.execute(
-            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, 'ALZ', amount, 'purchase', f'Compra automática via {method} - ID: {external_id}')
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (user_id, 'ALZ', amount, 'purchase', payment_id, f'Compra via {method}', f'purchase_{payment_id}')
         )
-        
-        # ✅ COMPENSAR TAXAS PARA CRIPTO (PROMOÇÃO GRATUITA)
+        print(f"✅ Entrada no ledger registrada para payment {payment_id}")
+
+        # ✅ COMPENSAÇÃO DE TAXAS PARA CRIPTO
         if method == 'crypto':
-            compensation_amount = amount * 0.02  # Compensar 2% de taxas
+            # 1 ALZ = R$ 0.10. A taxa é 2% do valor em BRL.
+            # Valor em BRL = amount * 0.10
+            # Taxa em BRL = Valor em BRL * 0.02
+            # Taxa em ALZ = Taxa em BRL / 0.10 = (amount * 0.10 * 0.02) / 0.10 = amount * 0.02
+            
+            bonus_amount = float(amount) * 0.02
+            
             cursor.execute(
-                "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                (compensation_amount, user_id)
+                "UPDATE balances SET available = available + %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+                (bonus_amount, user_id)
             )
             cursor.execute(
-                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                (user_id, 'ALZ', compensation_amount, 'fee_compensation', '🎁 Bônus compensação de taxas - Promoção Gratuita')
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (user_id, 'ALZ', bonus_amount, 'fee_compensation', payment_id, '🎁 Bônus compensação de taxa crypto', f'fee_comp_{payment_id}')
             )
-            print(f"🎁 Bônus de taxas: +{compensation_amount} ALZ para {email}")
+            print(f"🎁 Bônus aplicado para {email}: +{bonus_amount} ALZ")
+
+        cursor.execute("COMMIT")
+        return {"success": True, "user_created": user_created, "wallet_address": wallet_address}
+
+    except Exception as e:
+        cursor.execute("ROLLBACK")
+        print(f"❌ Erro ao processar pagamento automático: {e}")
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+# 🔒 Middleware de Autenticação
+def token_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Authorization token is missing or invalid"}), 401
+
+        token = auth_header.split(" ")[1]
+        user_id = get_user_id_from_token(token)
+
+        if not user_id:
+            return jsonify({"error": "Invalid authentication token"}), 401
         
-        # Atualizar pagamento
+        request.user_id = user_id
+        return f(*args, **kwargs)
+    return decorated_function
+
+# 🛒 ROTA DE COMPRA (USADA PELO FRONTEND)
+@app.route('/api/site/purchase', methods=['POST'])
+def site_purchase():
+    """Registrar uma compra de ALZ (primeiro passo)"""
+    data = request.json
+    email = data.get('email')
+    amount = data.get('amount') # Este é o valor em ALZ (do frontend)
+    method = data.get('method')
+    
+    if not email or not amount or not method:
+        return jsonify({"error": "Email, amount e method são obrigatórios"}), 400
+    
+    try:
+        amount = float(amount)
+    except ValueError:
+        return jsonify({"error": "Valor (amount) inválido"}), 400
+    
+    if amount <= 0:
+        return jsonify({"error": "Valor (amount) deve ser positivo"}), 400
+        
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        # 1. Registrar pagamento PRIMEIRO (SEMPRE PENDENTE)
+        # O frontend envia o 'amount' em ALZ (amount * 10), então precisamos reverter para BRL para o registro inicial.
+        # Taxa de conversão: 1 ALZ = R$ 0.10. Então, BRL = ALZ * 0.10.
+        
+        # O valor em BRL é:
+        brl_amount_for_db = float(amount) * 0.10
+        
         cursor.execute(
-            "UPDATE payments SET status = 'completed', user_id = %s, processed_at = CURRENT_TIMESTAMP WHERE id = %s",
+            "INSERT INTO payments (email, amount, method, status, metadata) VALUES (%s, %s, %s, 'pending', %s) RETURNING id",
+            (email, brl_amount_for_db, method, json.dumps({'alz_amount': float(amount)}))
+        )
+        payment_id = cursor.fetchone()['id']
+        
+        # 2. Buscar usuário existente
+        cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
+        user = cursor.fetchone()
+        
+        user_created = False
+        wallet_address = None
+        user_id = None
+        
+        if not user:
+            private_key, wallet_address = generate_polygon_wallet()
+            temp_password = f"temp_{secrets.token_hex(8)}"
+            hashed_password = generate_password_hash(temp_password)
+            nickname = f"User_{email.split('@')[0]}"
+            
+            cursor.execute(
+                "INSERT INTO users (email, password, nickname, wallet_address, private_key) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                (email, hashed_password, nickname, wallet_address, private_key)
+            )
+            user_id = cursor.fetchone()['id']
+            user_created = True
+            print(f"👤 Usuário criado com senha temporária: {email}")
+        else:
+            user_id = user['id']
+            wallet_address = user['wallet_address']
+            print(f"👤 Usuário existente: {email} - ID: {user_id}")
+        
+        # 3. Verificar/criar saldo
+        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
+        if not cursor.fetchone():
+            cursor.execute(
+                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+                (user_id, 0.0)
+            )
+            print(f"💰 Saldo criado para usuário {user_id}")
+        
+        # 4. Atualizar o registro de pagamento com o user_id
+        cursor.execute(
+            "UPDATE payments SET user_id = %s WHERE id = %s",
             (user_id, payment_id)
         )
         
         conn.commit()
-        print(f"🎉 Pagamento automático processado com sucesso: {email} - {amount} ALZ + bônus")
         
-        return {
+        return jsonify({
             "success": True,
+            "message": "Compra processada com sucesso! Aguarde a confirmação do pagamento.",
             "payment_id": payment_id,
-            "user_id": user_id,
             "user_created": user_created,
-            "wallet_address": wallet_address
-        }
+            "wallet_address": wallet_address,
+            "user_id": user_id
+        }), 200
         
     except Exception as e:
         conn.rollback()
-        print(f"❌ Erro processamento automático: {e}")
-        raise
+        print(f"❌ Erro no processamento da compra: {e}")
+        return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
+# Continuação do backend_wallet_integration.py
 
-# 🔄 FUNÇÃO PARA COMPENSAR TAXAS MANUALMENTE
-def compensate_fees_manually(email, original_amount, received_amount):
-    """Compensar taxas manualmente para garantir valor completo"""
+# 💳 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO
+@app.route('/api/nowpayments/create-invoice', methods=['POST'])
+def create_nowpayments_invoice():
+    """Cria uma fatura no NowPayments e retorna o link de pagamento."""
+    
+    NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
+    
+    if not NOWPAYMENTS_API_KEY:
+        print("❌ NOWPAYMENTS_API_KEY não configurada")
+        return jsonify({"error": "Configuração NowPayments ausente"}), 500
+        
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Buscar usuário
-        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        if user and original_amount > received_amount:
-            # Calcular diferença
-            difference = original_amount - received_amount
-            
-            # Creditar a diferença
-            cursor.execute(
-                "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                (difference, user['id'])
-            )
-            
-            # Registrar no ledger
-            cursor.execute(
-                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                (user['id'], 'ALZ', difference, 'fee_compensation', '🎁 Compensação manual de taxas - Valor Completo')
-            )
-            
-            conn.commit()
-            print(f"✅ Taxas compensadas manualmente para {email}: +{difference} ALZ")
-            return difference
-        
-    except Exception as e:
-        print(f"❌ Erro ao compensar taxas manualmente: {e}")
-    finally:
-        if 'conn' in locals():
-            conn.close()
-    return 0
-
-# ✅ ROTA PÚBLICA PARA VERIFICAR CONFIGURAÇÃO NOWPAYMENTS
-@app.route('/api/nowpayments/check-config', methods=['GET'])
-def check_nowpayments_config():
-    """Verificar configuração NowPayments - ROTA PÚBLICA"""
-    ipn_secret_from_env = os.getenv('NOWPAYMENTS_IPN_SECRET')
-    current_ipn_secret = NOWPAYMENTS_IPN_SECRET
-    
-    return jsonify({
-        'nowpayments_configured': bool(ipn_secret_from_env),
-        'ipn_secret_from_env': bool(ipn_secret_from_env),
-        'ipn_secret_length': len(current_ipn_secret) if current_ipn_secret else 0,
-        'ipn_secret_preview': current_ipn_secret[:8] + '...' + current_ipn_secret[-4:] if current_ipn_secret else 'NOT_SET',
-        'webhook_url': 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments',
-        'status': 'READY' if ipn_secret_from_env else 'MISSING_ENV_VAR',
-        'environment_variables': {
-            'NOWPAYMENTS_IPN_SECRET_set': bool(ipn_secret_from_env),
-            'STRIPE_SECRET_KEY_set': bool(os.getenv('STRIPE_SECRET_KEY')),
-            'NEON_DATABASE_URL_set': bool(os.getenv('NEON_DATABASE_URL')),
-            'SITE_ADMIN_TOKEN_set': bool(os.getenv('SITE_ADMIN_TOKEN'))
-        },
-        'setup_instructions': 'Adicione NOWPAYMENTS_IPN_SECRET no Render Dashboard'
-    })
-
-# ✅ TESTE MANUAL DO WEBHOOK NOWPAYMENTS
-@app.route('/api/nowpayments/test-webhook', methods=['POST', 'GET'])
-def test_nowpayments_webhook():
-    """Testar manualmente o webhook da NowPayments"""
-    try:
-        # Simular payload de teste
-        test_payload = {
-            "payment_id": "test_payment_" + str(int(time.time())),
-            "payment_status": "finished",
-            "pay_amount": 50.0,
-            "actually_paid": 50.0,
-            "pay_currency": "usdt",
-            "price_amount": 50.0,
-            "price_currency": "brl",
-            "order_id": "test_order_" + str(int(time.time())),
-            "order_description": "Compra de 500 ALZ",
-            "customer_email": "test@allianza.tech",
-            "ipn_type": "payment"
-        }
-        
-        # Gerar assinatura
-        payload_bytes = json.dumps(test_payload).encode('utf-8')
-        signature = hmac.new(
-            key=NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
-            msg=payload_bytes,
-            digestmod=hashlib.sha512
-        ).hexdigest()
-        
-        print(f"🔐 Assinatura gerada: {signature}")
-        
-        # Fazer requisição para o próprio webhook
-        headers = {
-            'Content-Type': 'application/json',
-            'x-nowpayments-ipn-signature': signature
-        }
-        
-        webhook_url = 'https://allianza-wallet-backend.onrender.com/webhook/nowpayments'
-        
-        response = requests.post(
-            webhook_url,
-            json=test_payload,
-            headers=headers,
-            timeout=30
-        )
-        
-        return jsonify({
-            'test_status': 'sent',
-            'response_status': response.status_code,
-            'response_text': response.text,
-            'signature_used': signature,
-            'webhook_url': webhook_url,
-            'test_payload': test_payload
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# ✅ ROTA DE DEBUG PARA VERIFICAR TOKEN
-@app.route('/api/site/admin/debug-token', methods=['GET', 'POST'])
-def debug_token():
-    """Debug completo para verificar o token"""
-    auth_header = request.headers.get('Authorization', '')
-    
-    print("=" * 60)
-    print("🔐 DEBUG TOKEN - INÍCIO")
-    print(f"📨 Método: {request.method}")
-    print(f"📨 Header Authorization: {auth_header}")
-    print(f"🌐 Origin: {request.headers.get('Origin')}")
-    print(f"🌐 Host: {request.headers.get('Host')}")
-    
-    if not auth_header.startswith('Bearer '):
-        print("❌ Header não começa com Bearer")
-        return jsonify({
-            "error": "Header não começa com Bearer",
-            "header_received": auth_header
-        }), 401
-    
-    admin_token = auth_header.replace('Bearer ', '').strip()
-    expected_token = SITE_ADMIN_TOKEN
-    
-    print(f"🔑 Token recebido: '{admin_token}'")
-    print(f"🔑 Token esperado: '{expected_token}'")
-    print(f"📏 Comprimento recebido: {len(admin_token)}")
-    print(f"📏 Comprimento esperado: {len(expected_token)}")
-    print(f"✅ Tokens são iguais? {admin_token == expected_token}")
-    
-    # Verificação caractere por caractere
-    if admin_token != expected_token:
-        print("❌ Tokens não coincidem!")
-        print("🔍 Comparação caractere por caractere:")
-        max_len = max(len(admin_token), len(expected_token))
-        for i in range(max_len):
-            char_rec = admin_token[i] if i < len(admin_token) else '❌ FIM'
-            char_exp = expected_token[i] if i < len(expected_token) else '❌ FIM'
-            match = "✅" if char_rec == char_exp else "❌"
-            print(f"   Posição {i}: '{char_rec}' {match} '{char_exp}'")
-    
-    print("🔐 DEBUG TOKEN - FIM")
-    print("=" * 60)
-    
-    if admin_token == expected_token:
-        return jsonify({
-            "success": True,
-            "message": "Token válido!",
-            "token_length": len(admin_token),
-            "token_match": True,
-            "backend_token_preview": f"{expected_token[:10]}...{expected_token[-4:]}"
-        }), 200
-    else:
-        return jsonify({
-            "error": "Token inválido",
-            "token_received": admin_token,
-            "token_expected": expected_token,
-            "token_length_received": len(admin_token),
-            "token_length_expected": len(expected_token),
-            "token_match": False
-        }), 401
-
-# 🔄 ROTA PARA ENVIO MANUAL DE TOKENS (ADMIN) - PRODUÇÃO
-@app.route('/api/site/admin/manual-token-send', methods=['POST'])
-def site_admin_manual_token_send():
-    """Enviar tokens manualmente para qualquer email - PRODUÇÃO"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        if not admin_token or admin_token != expected_token:
-            return jsonify({"error": "Token inválido"}), 401
-        
         data = request.json
+        payment_id = data.get('payment_id')
+        amount_usd_str = data.get('amount_usd')
         email = data.get('email')
-        amount = data.get('amount')
-        description = data.get('description', 'Crédito administrativo manual')
-        admin_user = data.get('admin_user', 'admin')
         
-        if not email or not amount:
-            return jsonify({"error": "Email e valor são obrigatórios"}), 400
-        
+        if not payment_id or not amount_usd_str or not email:
+            return jsonify({"error": "payment_id, amount_usd e email são obrigatórios"}), 400
+            
         try:
-            amount = float(amount)
-            if amount <= 0:
-                return jsonify({"error": "Valor deve ser positivo"}), 400
+            # Conversão explícita para float para garantir o formato correto
+            # O frontend já garante que o valor é uma string com 2 casas decimais.
+            amount_usd = float(amount_usd_str)
         except ValueError:
-            return jsonify({"error": "Valor inválido"}), 400
+            print(f"❌ Erro de conversão: amount_usd_str='{amount_usd_str}' não é um número válido.")
+            return jsonify({"error": "Valor de USD inválido"}), 400
+            
+        # 1. Obter o IPN Secret (não é necessário para a criação da fatura, mas bom ter)
+        # O NOWPAYMENTS_API_KEY já foi carregado no escopo global
         
+        # 2. Chamar a API do NowPayments
+        headers = {
+            'x-api-key': NOWPAYMENTS_API_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # O NowPayments espera o valor em USD para a fatura
+        payload = {
+            "price_amount": amount_usd,
+            "price_currency": "usd",
+            "pay_currency": "btc", # Deixar o NowPayments escolher a melhor
+            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+            "order_id": str(payment_id),
+            "order_description": f"Compra de ALZ por {email} - ID: {payment_id}",
+            "success_url": "https://allianza.tech/success",
+            "cancel_url": "https://allianza.tech/cancel",
+            "payout_address": None, # Pagamento direto para a conta NowPayments
+            "payout_currency": None,
+            "extra_id": email
+        }
+        
+        NOWPAYMENTS_URL = "https://api.nowpayments.io/v1/invoice"
+        
+        print(f"🔄 Enviando requisição NowPayments para {NOWPAYMENTS_URL}...")
+        print(f"DEBUG PAYLOAD: {payload}") # Log do payload
+        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload)
+        
+        if response.status_code != 201:
+            print(f"❌ Erro NowPayments: Status {response.status_code} - {response.text}")
+            return jsonify({"error": "Falha ao criar fatura NowPayments", "details": response.json()}), 500
+            
+        invoice_data = response.json()
+        
+        # 3. Atualizar o registro de pagamento com os dados da fatura
         conn = get_db_connection()
         cursor = conn.cursor()
         
         try:
             cursor.execute("BEGIN")
             
-            print(f"🔄 Processando envio manual: {email} - {amount} ALZ")
-            
-            # Verificar se o usuário existe
-            cursor.execute('SELECT id, email FROM users WHERE email = %s', (email,))
-            user = cursor.fetchone()
-            
-            if not user:
-                # Se o usuário não existe, criar um registro pendente
-                cursor.execute('''
-                    INSERT INTO payments (email, amount, method, status, description, metadata)
-                    VALUES (%s, %s, 'manual', 'pending', %s, %s)
-                    RETURNING id
-                ''', (email, amount, description, {'admin_user': admin_user, 'type': 'manual_credit'}))
-                
-                payment_id = cursor.fetchone()['id']
-                
-                # Registrar log administrativo
-                cursor.execute('''
-                    INSERT INTO admin_logs (admin_user, action, description, target_id)
-                    VALUES (%s, %s, %s, %s)
-                ''', (admin_user, 'manual_token_send_pending', 
-                      f'Crédito manual de {amount} ALZ para {email} (usuário não cadastrado)', 
-                      payment_id))
-                
-                conn.commit()
-                
-                return jsonify({
-                    'success': True,
-                    'message': f'Crédito de {amount} ALZ aguardando cadastro do usuário {email}',
-                    'payment_id': payment_id,
-                    'user_status': 'pending_registration'
-                })
-            
-            # Se o usuário existe, creditar diretamente
-            user_id = user['id']
-            
-            # Atualizar saldo
-            cursor.execute('''
-                INSERT INTO balances (user_id, available, asset)
-                VALUES (%s, %s, 'ALZ')
-                ON CONFLICT (user_id) 
-                DO UPDATE SET 
-                    available = balances.available + EXCLUDED.available,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING available
-            ''', (user_id, amount))
-            
-            new_balance = cursor.fetchone()['available']
-            
-            # Registrar no ledger
-            cursor.execute('''
-                INSERT INTO ledger_entries 
-                (user_id, asset, amount, entry_type, description, idempotency_key)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', (user_id, 'ALZ', amount, 'admin_credit', 
-                  f'Crédito administrativo: {description}',
-                  f'manual_credit_{user_id}_{int(datetime.utcnow().timestamp())}'))
-            
-            # Registrar log administrativo
-            cursor.execute('''
-                INSERT INTO admin_logs (admin_user, action, description, target_id)
-                VALUES (%s, %s, %s, %s)
-            ''', (admin_user, 'manual_token_send', 
-                  f'Crédito manual de {amount} ALZ para {email}', 
-                  user_id))
+            # O metadata é atualizado com || para preservar dados anteriores (como alz_amount)
+            cursor.execute(
+                "UPDATE payments SET method = %s, metadata = metadata || %s WHERE id = %s",
+                ('nowpayments', json.dumps({"invoice_id": invoice_data.get('id'), "payment_url": invoice_data.get('invoice_url')}) , payment_id)
+            )
             
             conn.commit()
             
             return jsonify({
-                'success': True,
-                'message': f'Crédito de {amount} ALZ enviado com sucesso para {email}',
-                'new_balance': float(new_balance),
-                'user_status': 'existing_user'
-            })
+                "success": True,
+                "invoice_url": invoice_data.get('invoice_url'),
+                "invoice_id": invoice_data.get('id'),
+                "payment_id": payment_id
+            }), 200
             
         except Exception as e:
             conn.rollback()
-            print(f'❌ Erro no envio manual de tokens: {e}')
-            return jsonify({'success': False, 'error': str(e)}), 500
+            print(f"❌ Erro ao atualizar pagamento com dados NowPayments: {e}")
+            return jsonify({"error": "Erro interno ao salvar dados da fatura"}), 500
         finally:
             conn.close()
             
     except Exception as e:
-        print(f'❌ Erro geral manual-token-send: {e}')
-        return jsonify({'error': str(e)}), 500
+        print(f"❌ Erro geral ao criar fatura NowPayments: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # 💳 ROTA PARA CRIAR SESSÃO STRIPE - PRODUÇÃO
 @app.route('/create-checkout-session', methods=['POST'])
@@ -640,167 +571,122 @@ def create_checkout_session():
         
     try:
         data = request.json
-        amount = data.get('amount')
+        amount = data.get('amount')  # Valor em centavos (inteiro)
         email = data.get('email')
         currency = data.get('currency', 'brl')
         
         if not amount or not email:
-            return jsonify({'error': 'Amount e email são obrigatórios'}), 400
+            return jsonify({"error": "Valor e email são obrigatórios"}), 400
+            
+        # O valor do item é o valor total da compra em R$ (BRL)
+        # O Stripe espera o valor em centavos (ex: R$ 10,00 = 1000)
         
-        # Validar amount
-        try:
-            amount_int = int(amount)
-            if amount_int <= 0:
-                return jsonify({'error': 'Amount deve ser maior que zero'}), 400
-            if amount_int < 50:
-                return jsonify({'error': 'Valor mínimo é R$ 0,50'}), 400
-        except (ValueError, TypeError):
-            return jsonify({'error': 'Amount deve ser um número válido'}), 400
-        
-        # URLs para produção
-        success_url = 'https://allianza.tech/success'
-        cancel_url = 'https://allianza.tech/cancel'
-        
-        # Criar sessão de checkout
-        try:
-            session = stripe.checkout.Session.create(
-                payment_method_types=['card'],
-                line_items=[{
-                    'price_data': {
-                        'currency': currency.lower(),
-                        'product_data': {
-                            'name': 'Allianza Tokens (ALZ)',
-                            'description': 'Compra de tokens ALZ para a plataforma Allianza'
-                        },
-                        'unit_amount': amount_int,
+        session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price_data': {
+                    'currency': currency,
+                    'product_data': {
+                        'name': 'Tokens Allianza (ALZ)',
                     },
-                    'quantity': 1,
-                }],
-                mode='payment',
-                success_url=success_url,
-                cancel_url=cancel_url,
-                customer_email=email,
-                metadata={
-                    'email': email, 
-                    'amount_brl': amount_int / 100,
-                    'source': 'allianza_site_production'
-                }
-            )
-            
-            return jsonify({
-                'id': session.id,
-                'url': session.url,
-                'success': True,
-                'message': 'Sessão de pagamento criada com sucesso'
-            })
-            
-        except stripe.error.StripeError as stripe_error:
-            return jsonify({
-                'error': f'Erro do Stripe: {str(stripe_error)}'
-            }), 400
-            
+                    'unit_amount': amount,
+                },
+                'quantity': 1,
+            }],
+            mode='payment',
+            customer_email=email,
+            success_url=request.url_root + 'success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url=request.url_root + 'cancel',
+            metadata={
+                'email': email,
+                'amount_brl': amount / 100,
+                'amount_alz': (amount / 100) / 0.10, # 1 ALZ = R$ 0.10
+                'method': 'stripe'
+            }
+        )
+        
+        return jsonify({'url': session.url})
+        
     except Exception as e:
-        return jsonify({
-            'error': f'Erro interno do servidor: {str(e)}'
-        }), 500
+        print(f"❌ Erro ao criar sessão Stripe: {e}")
+        return jsonify({'error': str(e)}), 500
 
-# 🌐 WEBHOOKS PARA PAGAMENTOS AUTOMÁTICOS - PRODUÇÃO
+# 🎣 WEBHOOK STRIPE
 @app.route('/webhook/stripe', methods=['POST'])
 def stripe_webhook():
-    """Webhook para pagamentos Stripe (Cartão) - PRODUÇÃO"""
+    """Receber eventos do Stripe"""
     if not STRIPE_AVAILABLE:
-        return jsonify({'error': 'Stripe não disponível'}), 503
+        return jsonify({'error': 'Stripe not available'}), 503
         
-    try:
-        payload = request.get_data()
-        sig_header = request.headers.get('Stripe-Signature')
-        
-        print(f"📥 Webhook Stripe PRODUÇÃO recebido: {request.headers}")
-        
-        # Verificar assinatura do webhook
-        try:
-            event = stripe.Webhook.construct_event(
-                payload, sig_header, STRIPE_WEBHOOK_SECRET
-            )
-        except ValueError as e:
-            print(f"❌ Payload inválido: {e}")
-            return jsonify({'error': 'Invalid payload'}), 400
-        except stripe.error.SignatureVerificationError as e:
-            print(f"❌ Assinatura inválida: {e}")
-            return jsonify({'error': 'Invalid signature'}), 401
-        
-        print(f"📊 Evento Stripe PRODUÇÃO: {event['type']}")
-        
-        if event['type'] == 'payment_intent.succeeded':
-            payment_intent = event['data']['object']
-            email = payment_intent.get('receipt_email') or payment_intent['metadata'].get('email')
-            amount = payment_intent['amount'] / 100
-            payment_id = payment_intent['id']
-            
-            if email and amount > 0:
-                result = process_automatic_payment(email, amount, 'credit_card', payment_id)
-                return jsonify(result), 200
-            else:
-                print("⚠️ Email ou valor inválido no webhook Stripe PRODUÇÃO")
-                return jsonify({'error': 'Invalid email or amount'}), 400
-                
-        elif event['type'] == 'charge.succeeded':
-            charge = event['data']['object']
-            email = charge.get('billing_details', {}).get('email')
-            amount = charge['amount'] / 100
-            payment_id = charge['id']
-            
-            if email and amount > 0:
-                result = process_automatic_payment(email, amount, 'credit_card', payment_id)
-                return jsonify(result), 200
-        
-        return jsonify({'success': True, 'message': 'Event processed'}), 200
-        
-    except Exception as e:
-        print(f"❌ Erro webhook Stripe PRODUÇÃO: {e}")
-        return jsonify({'error': str(e)}), 400
+    payload = request.data
+    sig_header = request.headers.get('stripe-signature')
+    event = None
 
-# ✅ FUNÇÃO PARA VERIFICAR ASSINATURA NOWPAYMENTS (CORRIGIDA)
-def verify_nowpayments_signature(payload_bytes, received_signature):
-    """Verificar assinatura NowPayments CORRETAMENTE"""
     try:
-        if not received_signature:
-            print("❌ Assinatura não fornecida")
-            return False
-            
-        # ✅ CORREÇÃO: Usar bytes do payload diretamente
-        expected_signature = hmac.new(
-            key=NOWPAYMENTS_IPN_SECRET.encode('utf-8'),
-            msg=payload_bytes,  # Já em bytes
-            digestmod=hashlib.sha512
-        ).hexdigest()
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, STRIPE_WEBHOOK_SECRET
+        )
+    except ValueError as e:
+        # Invalid payload
+        return 'Invalid payload', 400
+    except stripe.error.SignatureVerificationError as e:
+        # Invalid signature
+        return 'Invalid signature', 400
+
+    # Handle the checkout.session.completed event
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
         
-        print(f"🔐 Assinatura esperada: {expected_signature}")
-        print(f"🔐 Assinatura recebida: {received_signature}")
+        email = session.get('customer_email')
+        metadata = session.get('metadata', {})
+        amount_alz = metadata.get('amount_alz')
         
-        return hmac.compare_digest(received_signature, expected_signature)
-        
-    except Exception as e:
-        print(f"❌ Erro verificação assinatura: {e}")
+        if email and amount_alz:
+            try:
+                amount_alz = float(amount_alz)
+                result = process_automatic_payment(email, amount_alz, 'stripe', session.id)
+                if result['success']:
+                    print(f"✅ Pagamento Stripe processado com sucesso para {email}. {amount_alz} ALZ creditados.")
+                else:
+                    print(f"❌ Falha ao creditar tokens para {email}: {result['error']}")
+            except Exception as e:
+                print(f"❌ Erro ao processar pagamento Stripe: {e}")
+
+    return 'OK', 200
+
+# 🔑 FUNÇÕES AUXILIARES NOWPAYMENTS
+def verify_nowpayments_signature(payload, signature):
+    """Verifica a assinatura IPN da NowPayments"""
+    if not signature:
         return False
+        
+    # O payload deve ser os bytes brutos da requisição
+    # A chave secreta deve ser convertida para bytes
+    secret_bytes = NOWPAYMENTS_IPN_SECRET.encode('utf-8')
+    
+    # Calcular o HMAC-SHA512
+    calculated_signature = hmac.new(
+        secret_bytes, 
+        payload, 
+        hashlib.sha512
+    ).hexdigest()
+    
+    return calculated_signature == signature
 
-# ✅ FUNÇÃO PARA EXTRAIR DADOS NOWPAYMENTS (CORRIGIDA)
 def extract_nowpayments_data(data):
-    """Extrai dados CORRETAMENTE do payload NowPayments"""
+    """Extrai dados relevantes do payload da NowPayments"""
     try:
-        print(f"📦 Payload completo recebido: {data}")
-        
-        # ✅ CORREÇÃO: Campos conforme documentação oficial
+        # Status do pagamento
         payment_status = data.get('payment_status')
-        payment_id = data.get('payment_id')
+        payment_id = data.get('payment_id') or data.get('invoice_id')
         
-        # Múltiplos campos possíveis para email
-        email = (data.get('customer_email') or 
-                data.get('payer_email') or
-                data.get('buyer_email') or
-                data.get('email') or
-                extract_email_from_string(data.get('order_id', '')) or
-                extract_email_from_string(data.get('description', '')))
+        # Email. Tenta extrair de vários campos
+        email = (
+            data.get('order_description') or
+            data.get('customer_email') or
+            data.get('email') or
+            extract_email_from_string(data.get('order_id', '')) or
+            extract_email_from_string(data.get('description', '')))
         
         # Valores - usar pay_amount ou actually_paid
         pay_amount = float(data.get('pay_amount', 0))
@@ -856,7 +742,7 @@ def nowpayments_webhook():
                 "message": "NowPayments webhook está operacional",
                 "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
                 "method": "POST",
-                "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET),
+                "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET ),
                 "timestamp": datetime.now().isoformat()
             }), 200
         
@@ -892,184 +778,257 @@ def nowpayments_webhook():
         
         payment_status = payment_data['payment_status']
         email = payment_data['email']
-        amount = payment_data['amount']
+        amount = payment_data['amount'] # Este é o valor em cripto (ex: BTC, USDT)
         payment_id = payment_data['payment_id']
+        tx_hash = payment_data['tx_hash'] # Novo campo
         
         print(f"📊 Status do pagamento: {payment_status}")
         print(f"📧 Email identificado: {email}")
-        print(f"💰 Valor: {amount}")
-        print(f"🆔 ID do pagamento: {payment_id}")
+        print(f"💰 Valor: {amount} ({payment_data['currency']})")
+        print(f"🔗 Tx Hash: {tx_hash}")
         
-        # ✅ CORREÇÃO: Lógica de status aprimorada
-        if payment_status in ['finished', 'confirmed', 'success']:
-            if not email:
-                print("❌ Email não encontrado no payload")
-                return jsonify({'error': 'Email not found in payload'}), 400
-            
-            if amount <= 0:
-                print("❌ Valor inválido")
-                return jsonify({'error': 'Invalid amount'}), 400
-            
-            print(f"🎯 Processando pagamento confirmado: {email} - {amount}")
-            
-            try:
-                # Processar pagamento automático
-                result = process_automatic_payment(email, amount, 'crypto', payment_id)
-                print(f"✅ Pagamento processado com sucesso: {result}")
-                return jsonify(result), 200
-                
-            except Exception as e:
-                print(f"❌ Erro processamento pagamento: {e}")
-                return jsonify({'error': f'Payment processing failed: {str(e)}'}), 500
-                
-        elif payment_status == 'failed':
-            print(f"❌ Pagamento falhou: {payment_id}")
-            log_payment_failure(payment_id, data, 'failed')
-            return jsonify({'success': True, 'message': 'Payment failure logged'}), 200
-            
-        elif payment_status in ['waiting', 'confirming', 'partially_paid']:
-            print(f"⏳ Status intermediário: {payment_status}")
-            return jsonify({'success': True, 'message': f'Waiting for confirmation: {payment_status}'}), 200
-            
-        else:
-            print(f"⚠️ Status desconhecido: {payment_status}")
-            return jsonify({'success': True, 'message': f'Unknown status: {payment_status}'}), 200
-            
-    except Exception as e:
-        print(f"❌ ERRO CRÍTICO no webhook: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': f'Webhook processing failed: {str(e)}'}), 500
-
-def log_payment_failure(payment_id, data, status):
-    """Registrar falha de pagamento"""
-    try:
+        print(f"📊 Status do pagamento: {payment_status}")
+        print(f"📧 Email identificado: {email}")
+        print(f"💰 Valor: {amount} ({payment_data['currency']})")
+        
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        email = data.get('customer_email') or data.get('payer_email')
-        amount = data.get('pay_amount', 0)
-        
-        cursor.execute('''
-            INSERT INTO payment_logs 
-            (payment_id, email, amount, status, raw_data, created_at)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-        ''', (payment_id, email, amount, status, json.dumps(data)))
-        
-        conn.commit()
-        conn.close()
-        print(f"📝 Falha registrada no banco: {payment_id}")
-    except Exception as e:
-        print(f"❌ Erro ao registrar falha: {e}")
-
-# 🔑 Login Admin - PRODUÇÃO
-@app.route('/admin/login', methods=['POST'])
-def admin_login():
-    data = request.json
-    username = data.get('username')
-    password = data.get('password')
-    
-    if not username or not password:
-        return jsonify({"error": "Credenciais necessárias"}), 400
-    
-    if username in ADMIN_USERS and ADMIN_USERS[username] == password:
-        token = jwt.encode({
-            'username': username,
-            'role': 'admin',
-            'exp': datetime.utcnow() + timedelta(hours=24)
-        }, ADMIN_JWT_SECRET, algorithm='HS256')
-        
-        return jsonify({
-            "success": True,
-            "token": token,
-            "user": username
-        }), 200
-    
-    return jsonify({"error": "Credenciais inválidas"}), 401
-
-# 🔄 Rota para o Site processar pagamentos - PRODUÇÃO
-@app.route('/api/site/purchase', methods=['POST'])
-def site_process_purchase():
-    """Processar compra do site - PRODUÇÃO"""
-    data = request.json
-    email = data.get('email')
-    amount = data.get('amount')
-    method = data.get('method')
-    
-    if not email or not amount:
-        return jsonify({"error": "Email e valor são obrigatórios"}), 400
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("BEGIN")
-        
-        # 1. Registrar pagamento PRIMEIRO (SEMPRE PENDENTE)
-        cursor.execute(
-            "INSERT INTO payments (email, amount, method, status) VALUES (%s, %s, %s, 'pending') RETURNING id",
-            (email, amount, method)
-        )
-        payment_id = cursor.fetchone()['id']
-        
-        # 2. Buscar usuário existente
-        cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        user_created = False
-        wallet_address = None
-        user_id = None
-        
-        if not user:
-            private_key, wallet_address = generate_polygon_wallet()
-            temp_password = f"temp_{secrets.token_hex(8)}"
-            hashed_password = generate_password_hash(temp_password)
-            nickname = f"User_{email.split('@')[0]}"
+        try:
+            # 1. Buscar o registro de pagamento inicial
+            cursor.execute("SELECT id, amount, metadata FROM payments WHERE id = %s", (payment_id,))
+            db_payment = cursor.fetchone()
             
-            cursor.execute(
-                "INSERT INTO users (email, password, nickname, wallet_address, private_key) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                (email, hashed_password, nickname, wallet_address, private_key)
-            )
-            user_id = cursor.fetchone()['id']
-            user_created = True
-            print(f"👤 Usuário criado com senha temporária: {email}")
-        else:
-            user_id = user['id']
-            wallet_address = user['wallet_address']
-            print(f"👤 Usuário existente: {email} - ID: {user_id}")
+            if not db_payment:
+                # Tenta buscar pelo tx_hash (caso seja o segundo webhook)
+                cursor.execute("SELECT id, amount, metadata FROM payments WHERE tx_hash = %s", (payment_id,))
+                db_payment = cursor.fetchone()
+                
+            if not db_payment:
+                print(f"⚠️ Pagamento ID {payment_id} não encontrado no DB. Ignorando.")
+                return 'Payment not found', 200
+                
+            db_payment_id = db_payment['id']
+            db_metadata = db_payment['metadata']
+            
+            # 2. Processar status
+            if payment_status in ['finished', 'sending', 'partially_paid', 'fully_paid', 'confirmed']:
+                # Statuses que indicam pagamento bem-sucedido ou em progresso
+                
+                # Verifica se já foi processado
+                cursor.execute("SELECT status FROM payments WHERE id = %s", (db_payment_id,))
+                current_status = cursor.fetchone()['status']
+                
+                if current_status == 'completed':
+                    print(f"✅ Pagamento ID {db_payment_id} já está COMPLETED. Ignorando evento.")
+                    return 'Already completed', 200
+                
+                # Se o status for 'finished' ou 'fully_paid', processa o crédito de ALZ
+                if payment_status in ['finished', 'fully_paid', 'confirmed']:
+                    
+                    # ✅ CORREÇÃO: Usar o valor em ALZ que foi salvo no metadata
+                    alz_amount_to_credit = db_metadata.get('alz_amount')
+                    
+                    if not alz_amount_to_credit:
+                        print(f"❌ Metadata 'alz_amount' não encontrado para ID {db_payment_id}. Não é possível creditar.")
+                        return 'Missing ALZ amount', 400
+                        
+                    alz_amount_to_credit = float(alz_amount_to_credit)
+                    
+                    # 3. Processar pagamento automático (creditar ALZ)
+                    result = process_automatic_payment(email, alz_amount_to_credit, 'crypto', payment_id)
+                    
+                    if result['success']:
+                        # 4. Atualizar status do pagamento para 'completed'
+                        cursor.execute(
+                            "UPDATE payments SET status = 'completed', tx_hash = %s, processed_at = %s WHERE id = %s",
+                            (tx_hash, datetime.utcnow(), db_payment_id) # Usando tx_hash
+                        )
+                        conn.commit()
+                        print(f"🎉 Pagamento ID {db_payment_id} COMPLETED. {alz_amount_to_credit} ALZ creditados.")
+                        return 'Payment completed and tokens credited', 200
+                    else:
+                        # Falha ao creditar tokens (erro de DB)
+                        print(f"❌ Falha ao creditar tokens para ID {db_payment_id}: {result['error']}")
+                        return 'Token credit failure', 500
+                        
+                else:
+                    # Outros status de progresso (sending, partially_paid)
+                    cursor.execute(
+                        "UPDATE payments SET status = %s, tx_hash = %s WHERE id = %s",
+                        (payment_status, tx_hash, db_payment_id) # Usando tx_hash
+                    )
+                    conn.commit()
+                    print(f"🔄 Pagamento ID {db_payment_id} atualizado para status: {payment_status}")
+                    return 'Status updated', 200
+                    
+            elif payment_status in ['failed', 'expired', 'refunded']:
+                # Statuses de falha
+                cursor.execute(
+                    "UPDATE payments SET status = %s, tx_hash = %s WHERE id = %s",
+                    (payment_status, tx_hash, db_payment_id) # Usando tx_hash
+                )
+                conn.commit()
+                print(f"🔴 Pagamento ID {db_payment_id} falhou/expirou. Status: {payment_status}")
+                return 'Payment failed', 200
+            
+            else:
+                # Status desconhecido
+                print(f"❓ Status desconhecido: {payment_status}. Ignorando.")
+                return 'Unknown status', 200
+
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro fatal no NowPayments Webhook: {e}")
+            return 'Internal Server Error', 500
+        finally:
+            conn.close()
+
+    except Exception as e:
+        print(f"❌ Erro geral no NowPayments Webhook: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ✅ ROTA PARA CHECAR CONFIGURAÇÃO NOWPAYMENTS
+@app.route('/api/nowpayments/check-config', methods=['GET'])
+def check_nowpayments_config():
+    """Verifica se as chaves da NowPayments estão configuradas"""
+    return jsonify({
+        "ipn_secret_configured": bool(NOWPAYMENTS_IPN_SECRET),
+        "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET),
+        "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+        "status": "OK" if NOWPAYMENTS_IPN_SECRET else "MISSING_SECRET"
+    } ), 200
+
+# ✅ ROTA PARA TESTAR WEBHOOK NOWPAYMENTS (SIMULAÇÃO)
+@app.route('/api/nowpayments/test-webhook', methods=['POST'])
+def test_nowpayments_webhook():
+    """Simula um evento de webhook da NowPayments (apenas para debug)"""
+    try:
+        data = request.json
         
-        # 3. Verificar/criar saldo
-        cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
-        if not cursor.fetchone():
-            cursor.execute(
-                "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
-                (user_id, 0.0)
-            )
-            print(f"💰 Saldo criado para usuário {user_id}")
+        # Simula a assinatura (apenas para debug local, não use em produção)
+        payload_bytes = json.dumps(data).encode('utf-8')
+        secret_bytes = NOWPAYMENTS_IPN_SECRET.encode('utf-8')
+        simulated_signature = hmac.new(secret_bytes, payload_bytes, hashlib.sha512).hexdigest()
         
-        # 4. ✅ CORREÇÃO: NUNCA creditar automaticamente - SEMPRE PENDENTE
-        cursor.execute(
-            "UPDATE payments SET user_id = %s WHERE id = %s",
-            (user_id, payment_id)
+        # Envia a requisição para o próprio webhook
+        response = requests.post(
+            request.url_root + 'webhook/nowpayments',
+            data=payload_bytes,
+            headers={
+                'Content-Type': 'application/json',
+                'x-nowpayments-ipn-signature': simulated_signature
+            }
         )
-        
-        conn.commit()
         
         return jsonify({
             "success": True,
-            "message": "Compra processada com sucesso! Aguarde a confirmação do pagamento.",
-            "payment_id": payment_id,
-            "user_created": user_created,
-            "wallet_address": wallet_address,
-            "user_id": user_id
+            "message": "Webhook de teste enviado e processado.",
+            "response_status": response.status_code,
+            "response_text": response.text,
+            "simulated_signature": simulated_signature
         }), 200
         
     except Exception as e:
-        conn.rollback()
-        print(f"❌ Erro no processamento da compra: {e}")
+        return jsonify({'error': str(e)}), 500
+# Continuação do backend_wallet_integration.py
+
+# 💳 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO
+@app.route('/api/nowpayments/create-invoice', methods=['POST'])
+def create_nowpayments_invoice():
+    """Cria uma fatura no NowPayments e retorna o link de pagamento."""
+    
+    NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
+    
+    if not NOWPAYMENTS_API_KEY:
+        print("❌ NOWPAYMENTS_API_KEY não configurada")
+        return jsonify({"error": "Configuração NowPayments ausente"}), 500
+        
+    try:
+        data = request.json
+        payment_id = data.get('payment_id')
+        amount_usd_str = data.get('amount_usd')
+        email = data.get('email')
+        
+        if not payment_id or not amount_usd_str or not email:
+            return jsonify({"error": "payment_id, amount_usd e email são obrigatórios"}), 400
+            
+        try:
+            # Conversão explícita para float para garantir o formato correto
+            # O frontend já garante que o valor é uma string com 2 casas decimais.
+            amount_usd = float(amount_usd_str)
+        except ValueError:
+            print(f"❌ Erro de conversão: amount_usd_str='{amount_usd_str}' não é um número válido.")
+            return jsonify({"error": "Valor de USD inválido"}), 400
+            
+        # 1. Obter o IPN Secret (não é necessário para a criação da fatura, mas bom ter)
+        # O NOWPAYMENTS_API_KEY já foi carregado no escopo global
+        
+        # 2. Chamar a API do NowPayments
+        headers = {
+            'x-api-key': NOWPAYMENTS_API_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # O NowPayments espera o valor em USD para a fatura
+        payload = {
+            "price_amount": amount_usd,
+            "price_currency": "usd",
+            "pay_currency": "btc", # Deixar o NowPayments escolher a melhor
+            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+            "order_id": str(payment_id),
+            "order_description": f"Compra de ALZ por {email} - ID: {payment_id}",
+            "success_url": "https://allianza.tech/success",
+            "cancel_url": "https://allianza.tech/cancel",
+            "payout_address": None, # Pagamento direto para a conta NowPayments
+            "payout_currency": None,
+            "extra_id": email
+        }
+        
+        NOWPAYMENTS_URL = "https://api.nowpayments.io/v1/invoice"
+        
+        print(f"🔄 Enviando requisição NowPayments para {NOWPAYMENTS_URL}...")
+        print(f"DEBUG PAYLOAD: {payload}") # Log do payload
+        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload)
+        
+        if response.status_code != 201:
+            print(f"❌ Erro NowPayments: Status {response.status_code} - {response.text}")
+            return jsonify({"error": "Falha ao criar fatura NowPayments", "details": response.json()}), 500
+            
+        invoice_data = response.json()
+        
+        # 3. Atualizar o registro de pagamento com os dados da fatura
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            
+            # O metadata é atualizado com || para preservar dados anteriores (como alz_amount)
+            cursor.execute(
+                "UPDATE payments SET method = %s, metadata = metadata || %s WHERE id = %s",
+                ('nowpayments', json.dumps({"invoice_id": invoice_data.get('id'), "payment_url": invoice_data.get('invoice_url')}) , payment_id)
+            )
+            
+            conn.commit()
+            
+            return jsonify({
+                "success": True,
+                "invoice_url": invoice_data.get('invoice_url'),
+                "invoice_id": invoice_data.get('id'),
+                "payment_id": payment_id
+            }), 200
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro ao atualizar pagamento com dados NowPayments: {e}")
+            return jsonify({"error": "Erro interno ao salvar dados da fatura"}), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f"❌ Erro geral ao criar fatura NowPayments: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
 
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 @app.route('/api/site/admin/payments', methods=['GET'])
@@ -1113,7 +1072,7 @@ def site_admin_payments():
         
         cursor.execute('''
             SELECT p.id, p.email, p.amount, p.method, p.status, p.created_at, 
-                   p.processed_at, u.wallet_address, u.nickname
+                   p.processed_at, u.wallet_address, u.nickname, p.metadata
             FROM payments p
             LEFT JOIN users u ON p.user_id = u.id
             ORDER BY p.created_at DESC
@@ -1122,9 +1081,20 @@ def site_admin_payments():
         
         print(f"✅ Retornando {len(payments)} pagamentos")
         
+        # Converte o resultado para um formato JSON serializável
+        data_list = []
+        for payment in payments:
+            payment_dict = dict(payment)
+            # Converte valores numéricos (Decimal) para float para JSON
+            payment_dict['amount'] = float(payment_dict['amount'])
+            # O metadata já é um JSONB, mas garantimos que seja um dict
+            if payment_dict['metadata'] is None:
+                payment_dict['metadata'] = {}
+            data_list.append(payment_dict)
+
         return jsonify({
             "success": True,
-            "data": [dict(payment) for payment in payments]
+            "data": data_list
         }), 200
         
     except Exception as e:
@@ -1229,43 +1199,52 @@ def site_admin_process_payments():
             
             for payment_id in payment_ids:
                 cursor.execute(
-                    "SELECT id, email, amount, user_id FROM payments WHERE id = %s AND status = 'pending'",
+                    "SELECT id, email, amount, user_id, method, metadata FROM payments WHERE id = %s AND status = 'pending'",
                     (payment_id,)
                 )
                 payment = cursor.fetchone()
                 
                 if payment and payment['user_id']:
-                    # Creditar valor completo
+                    
+                    # ✅ CORREÇÃO: Usar o valor em ALZ do metadata (se existir)
+                    alz_amount_to_credit = float(payment['amount']) / 0.10 # Valor original em BRL convertido para ALZ
+                    
+                    if payment['metadata'] and payment['metadata'].get('alz_amount'):
+                        alz_amount_to_credit = float(payment['metadata']['alz_amount'])
+                        
+                    # Creditar o valor em ALZ
                     cursor.execute(
                         "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                        (payment['amount'], payment['user_id'])
+                        (alz_amount_to_credit, payment['user_id'])
                     )
                     
-                    # ✅ COMPENSAR TAXAS PARA CRIPTO
+                    # Registrar no ledger
+                    cursor.execute(
+                        "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, related_id) VALUES (%s, %s, %s, %s, %s, %s)",
+                        (payment['user_id'], 'ALZ', alz_amount_to_credit, 'purchase', f'Compra {payment["method"]} processada - Payment ID: {payment_id}', payment_id)
+                    )
+                    
+                    # ✅ COMPENSAR TAXAS PARA CRIPTO (Se for o caso)
                     if payment['method'] == 'crypto':
-                        bonus_amount = float(payment['amount']) * 0.02  # Bônus de 2%
+                        bonus_amount = alz_amount_to_credit * 0.02  # Bônus de 2%
                         cursor.execute(
                             "UPDATE balances SET available = available + %s WHERE user_id = %s",
                             (bonus_amount, payment['user_id'])
                         )
                         cursor.execute(
-                            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎁 Bônus promoção gratuita')
+                            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, related_id) VALUES (%s, %s, %s, %s, %s, %s)",
+                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎁 Bônus compensação de taxa crypto', payment_id)
                         )
                         print(f"🎁 Bônus aplicado para {payment['email']}: +{bonus_amount} ALZ")
                     
-                    cursor.execute(
-                        "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description) VALUES (%s, %s, %s, %s, %s)",
-                        (payment['user_id'], 'ALZ', payment['amount'], 'purchase', f'Compra PIX processada - Payment ID: {payment_id}')
-                    )
-                    
+                    # Atualizar status
                     cursor.execute(
                         "UPDATE payments SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = %s",
                         (payment_id,)
                     )
                     
                     processed_count += 1
-                    print(f"✅ Tokens creditados para pagamento {payment_id}: {payment['amount']} ALZ + bônus")
+                    print(f"✅ Tokens creditados para pagamento {payment_id}: {alz_amount_to_credit} ALZ")
             
             conn.commit()
             
@@ -1297,7 +1276,106 @@ def get_user_id_from_token(token):
     except (ValueError, IndexError):
         pass
     return None
+# Continuação do backend_wallet_integration.py
 
+# 💳 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO
+@app.route('/api/nowpayments/create-invoice', methods=['POST'])
+def create_nowpayments_invoice():
+    """Cria uma fatura no NowPayments e retorna o link de pagamento."""
+    
+    NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
+    
+    if not NOWPAYMENTS_API_KEY:
+        print("❌ NOWPAYMENTS_API_KEY não configurada")
+        return jsonify({"error": "Configuração NowPayments ausente"}), 500
+        
+    try:
+        data = request.json
+        payment_id = data.get('payment_id')
+        amount_usd_str = data.get('amount_usd')
+        email = data.get('email')
+        
+        if not payment_id or not amount_usd_str or not email:
+            return jsonify({"error": "payment_id, amount_usd e email são obrigatórios"}), 400
+            
+        try:
+            # Conversão explícita para float para garantir o formato correto
+            # O frontend já garante que o valor é uma string com 2 casas decimais.
+            amount_usd = float(amount_usd_str)
+        except ValueError:
+            print(f"❌ Erro de conversão: amount_usd_str='{amount_usd_str}' não é um número válido.")
+            return jsonify({"error": "Valor de USD inválido"}), 400
+            
+        # 1. Obter o IPN Secret (não é necessário para a criação da fatura, mas bom ter)
+        # O NOWPAYMENTS_API_KEY já foi carregado no escopo global
+        
+        # 2. Chamar a API do NowPayments
+        headers = {
+            'x-api-key': NOWPAYMENTS_API_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # O NowPayments espera o valor em USD para a fatura
+        payload = {
+            "price_amount": amount_usd,
+            "price_currency": "usd",
+            "pay_currency": "btc", # Deixar o NowPayments escolher a melhor
+            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
+            "order_id": str(payment_id),
+            "order_description": f"Compra de ALZ por {email} - ID: {payment_id}",
+            "success_url": "https://allianza.tech/success",
+            "cancel_url": "https://allianza.tech/cancel",
+            "payout_address": None, # Pagamento direto para a conta NowPayments
+            "payout_currency": None,
+            "extra_id": email
+        }
+        
+        NOWPAYMENTS_URL = "https://api.nowpayments.io/v1/invoice"
+        
+        print(f"🔄 Enviando requisição NowPayments para {NOWPAYMENTS_URL}...")
+        print(f"DEBUG PAYLOAD: {payload}") # Log do payload
+        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload)
+        
+        if response.status_code != 201:
+            print(f"❌ Erro NowPayments: Status {response.status_code} - {response.text}")
+            return jsonify({"error": "Falha ao criar fatura NowPayments", "details": response.json()}), 500
+            
+        invoice_data = response.json()
+        
+        # 3. Atualizar o registro de pagamento com os dados da fatura
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            
+            # O metadata é atualizado com || para preservar dados anteriores (como alz_amount)
+            cursor.execute(
+                "UPDATE payments SET method = %s, metadata = metadata || %s WHERE id = %s",
+                ('nowpayments', json.dumps({"invoice_id": invoice_data.get('id'), "payment_url": invoice_data.get('invoice_url')}) , payment_id)
+            )
+            
+            conn.commit()
+            
+            return jsonify({
+                "success": True,
+                "invoice_url": invoice_data.get('invoice_url'),
+                "invoice_id": invoice_data.get('id'),
+                "payment_id": payment_id
+            }), 200
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro ao atualizar pagamento com dados NowPayments: {e}")
+            return jsonify({"error": "Erro interno ao salvar dados da fatura"}), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f"❌ Erro geral ao criar fatura NowPayments: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# 🔒 Middleware de Autenticação (aplicado globalmente, exceto para rotas públicas)
 @app.before_request
 def authenticate_request():
     public_routes = [
@@ -1313,17 +1391,19 @@ def authenticate_request():
         "/create-checkout-session",
         "/admin/login",
         "/debug/stripe",
-        "/api/site/admin/debug-token",
-        "/api/nowpayments/check-config",  # ✅ NOVO - ROTA PÚBLICA
-        "/api/nowpayments/test-webhook",  # ✅ NOVO - ROTA PÚBLICA
+        "/api/nowpayments/check-config",
+        "/api/nowpayments/test-webhook",
     ]
     
-    if request.path.startswith("/api/site/admin") or request.path == "/health":
+    # Exclui rotas de admin e OPTIONS
+    if request.path.startswith("/api/site/admin") or request.method == "OPTIONS":
         return
         
-    if request.method == "OPTIONS" or request.path in public_routes:
+    # Rotas públicas
+    if request.path in public_routes:
         return
 
+    # Rotas protegidas (requerem token)
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.startswith("Bearer "):
         return jsonify({"error": "Authorization token is missing or invalid"}), 401
@@ -1335,7 +1415,8 @@ def authenticate_request():
         return jsonify({"error": "Invalid authentication token"}), 401
     
     request.user_id = user_id
-
+    
+# 👤 ROTA DE REGISTRO
 @app.route("/register", methods=["POST"])
 def register_user():
     data = request.json
@@ -1352,40 +1433,48 @@ def register_user():
     try:
         cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
         if cursor.fetchone():
-            return jsonify({"error": "User with this email already exists"}), 409
+            return jsonify({"error": "User already exists"}), 400
 
         private_key, wallet_address = generate_polygon_wallet()
         hashed_password = generate_password_hash(password)
-        
+
         cursor.execute(
             "INSERT INTO users (email, password, nickname, wallet_address, private_key) VALUES (%s, %s, %s, %s, %s) RETURNING id",
             (email, hashed_password, nickname, wallet_address, private_key)
         )
-        
-        result = cursor.fetchone()
-        user_id = result["id"]
+        user_id = cursor.fetchone()['id']
 
+        # Inicializa o saldo
         cursor.execute(
-            "INSERT INTO balances (user_id, asset, available, staking_balance) VALUES (%s, %s, %s, %s)",
-            (user_id, "ALZ", 0.0, 0.0)
+            "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+            (user_id, 0.0)
         )
+
         conn.commit()
 
+        # Mock token para login instantâneo
         auth_token = f"mock_token_{user_id}_{int(time.time())}"
 
         return jsonify({
-            "user": {"id": user_id, "email": email, "nickname": nickname, "wallet_address": wallet_address},
-            "token": auth_token,
-            "message": "User registered successfully"
+            "success": True,
+            "message": "User registered successfully",
+            "user": {
+                "id": user_id,
+                "email": email,
+                "nickname": nickname,
+                "wallet_address": wallet_address
+            },
+            "token": auth_token
         }), 201
 
     except Exception as e:
         conn.rollback()
         print(f"❌ Erro no registro: {e}")
-        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
+        return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
 
+# 🔑 ROTA DE LOGIN
 @app.route("/login", methods=["POST"])
 def login_user():
     data = request.json
@@ -1397,7 +1486,7 @@ def login_user():
 
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute("SELECT id, email, nickname, wallet_address, private_key, password FROM users WHERE email = %s", (email,))
         user_data = cursor.fetchone()
@@ -1432,12 +1521,16 @@ def login_user():
     finally:
         conn.close()
 
+# ⚙️ ROTA DE SETUP INICIAL (PARA USUÁRIOS CRIADOS VIA COMPRA)
 @app.route("/first-time-setup", methods=["POST"])
 def first_time_setup():
     data = request.json
     email = data.get('email')
     password = data.get('password')
     nickname = data.get('nickname')
+
+    if not email or not password or not nickname:
+        return jsonify({"error": "Email, password, and nickname are required"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1455,9 +1548,10 @@ def first_time_setup():
 
         hashed_password = generate_password_hash(password)
         cursor.execute(
-            "UPDATE users SET password = %s, nickname = %s, updated_at = CURRENT_TIMESTAMP WHERE email = %s",
+            "UPDATE users SET password = %s, nickname = %s, updated_at = CURRENT_TIMESTAMP WHERE email = %s RETURNING id, wallet_address",
             (hashed_password, nickname, email)
         )
+        user = cursor.fetchone()
 
         cursor.execute("SELECT available, staking_balance FROM balances WHERE user_id = %s", (user['id'],))
         balance_data = cursor.fetchone()
@@ -1489,6 +1583,7 @@ def first_time_setup():
     finally:
         conn.close()
 
+# 🔍 ROTA PARA CHECAR SE O USUÁRIO EXISTE
 @app.route("/check-user", methods=["POST"])
 def check_user():
     data = request.json
@@ -1536,7 +1631,7 @@ def health_check():
         "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET),
         "nowpayments_webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
         "nowpayments_status": "ACTIVE" if NOWPAYMENTS_IPN_SECRET else "INACTIVE"
-    }), 200
+    } ), 200
 
 # ✅ Rota para informações do sistema - PRODUÇÃO (ATUALIZADA)
 @app.route('/system/info', methods=['GET'])
@@ -1565,7 +1660,7 @@ def system_info():
             "https://allianza.tech", 
             "https://wallet.allianza.tech"
         ]
-    }), 200
+    } ), 200
 
 # ✅ ENDPOINT DE DIAGNÓSTICO STRIPE - PRODUÇÃO
 @app.route('/debug/stripe', methods=['GET'])
@@ -1583,41 +1678,25 @@ def debug_stripe():
 
 # ✅ ROTAS PARA BALANCES E LEDGER
 @app.route('/balances/me', methods=['GET'])
+@token_required
 def get_balances_me():
     try:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return jsonify({"error": "Authorization token is missing or invalid"}), 401
-
-        token = auth_header.split(" ")[1]
-        user_id = get_user_id_from_token(token)
-
-        if not user_id:
-            return jsonify({"error": "Invalid authentication token"}), 401
-
+        user_id = request.user_id
         conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute("SELECT available, locked, staking_balance FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user_id,))
         balance_data = cursor.fetchone()
         
-        balance = {
-            "asset": "ALZ",
-            "available_balance": 0.0,
-            "locked_balance": 0.0,
-            "staking_balance": 0.0,
-            "total_balance": 0.0
-        }
+        balance = {"available_balance": 0.0, "locked_balance": 0.0, "staking_balance": 0.0, "total_balance": 0.0, "asset": "ALZ"}
         
         if balance_data:
             balance["available_balance"] = float(balance_data["available"]) if balance_data["available"] else 0.0
             balance["locked_balance"] = float(balance_data["locked"]) if balance_data["locked"] else 0.0
             balance["staking_balance"] = float(balance_data["staking_balance"]) if balance_data["staking_balance"] else 0.0
             balance["total_balance"] = balance["available_balance"] + balance["staking_balance"]
-
-        return jsonify({
-            "balance": balance
-        }), 200
+            
+        return jsonify({"balance": balance}), 200
         
     except Exception as e:
         print(f"❌ Erro ao buscar saldo: {e}")
@@ -1627,18 +1706,10 @@ def get_balances_me():
             conn.close()
 
 @app.route('/ledger/history', methods=['GET'])
+@token_required
 def get_ledger_history():
     try:
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return jsonify({"error": "Authorization token is missing or invalid"}), 401
-
-        token = auth_header.split(" ")[1]
-        user_id = get_user_id_from_token(token)
-
-        if not user_id:
-            return jsonify({"error": "Invalid authentication token"}), 401
-
+        user_id = request.user_id
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
 
@@ -1648,14 +1719,20 @@ def get_ledger_history():
         cursor.execute('''
             SELECT id, asset, amount, entry_type, description, created_at 
             FROM ledger_entries 
-            WHERE user_id = %s 
-            ORDER BY created_at DESC 
+            WHERE user_id = %s
+            ORDER BY created_at DESC
             LIMIT %s OFFSET %s
         ''', (user_id, limit, offset))
-        
         entries = cursor.fetchall()
         
-        return jsonify([dict(entry) for entry in entries]), 200
+        # Converte o resultado para um formato JSON serializável
+        data_list = []
+        for entry in entries:
+            entry_dict = dict(entry)
+            entry_dict['amount'] = float(entry_dict['amount'])
+            data_list.append(entry_dict)
+            
+        return jsonify({"history": data_list}), 200
         
     except Exception as e:
         print(f"❌ Erro ao buscar histórico do ledger: {e}")
@@ -1664,30 +1741,20 @@ def get_ledger_history():
         if 'conn' in locals():
             conn.close()
 
-if __name__ == "__main__":
-    print("🚀 INICIANDO SERVIDOR ALLIANZA WALLET BACKEND - PRODUÇÃO")
+# 🚀 INICIALIZAÇÃO DO FLASK
+if __name__ == '__main__':
     print("=" * 60)
-    print(f"🔑 Token Admin Site: {SITE_ADMIN_TOKEN}")
-    print(f"🔐 Stripe Disponível: {STRIPE_AVAILABLE}")
-    print(f"🔗 NowPayments Webhook: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
-    print(f"🔑 NowPayments IPN Secret: {NOWPAYMENTS_IPN_SECRET[:8]}... ({len(NOWPAYMENTS_IPN_SECRET)} chars)")
-    
-    if STRIPE_AVAILABLE:
-        is_production = stripe.api_key.startswith('sk_live_')
-        print(f"📦 Versão Stripe: 8.0.0")
-        print(f"🌐 Ambiente Stripe: {'PRODUÇÃO 🎉' if is_production else 'TESTE ⚠️'}")
-    
-    print("🎁 SISTEMA CONFIGURADO COM TRANSFERÊNCIAS GRATUITAS")
-    print("💸 Compensação automática de 2% para pagamentos cripto")
-    print("🌐 Rotas públicas:")
+    print("🔗 Rotas disponíveis:")
+    print("🔗 Rotas públicas:")
     print("   - GET  /health")
-    print("   - GET  /system/info") 
+    print("   - GET  /system/info")
+    print("   - POST /register")
+    print("   - POST /login")
+    print("   - POST /first-time-setup")
+    print("   - POST /check-user")
     print("   - POST /api/site/purchase")
-    print("   - POST /register, /login, /first-time-setup, /check-user")
     print("   - POST /create-checkout-session")
     print("   - GET  /debug/stripe")
-    print("   - POST /api/site/admin/manual-token-send")
-    print("   - GET  /api/site/admin/debug-token")
     print("🔗 NowPayments (PÚBLICAS):")
     print("   - GET  /api/nowpayments/check-config")
     print("   - POST /api/nowpayments/test-webhook")
