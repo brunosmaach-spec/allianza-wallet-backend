@@ -106,6 +106,7 @@ CORS(app, resources={
     r"/*": {
         "origins": [
             "https://allianza.tech",
+            "https://admin.allianza.tech",
             "https://www.allianza.tech", 
             "https://wallet.allianza.tech",
             "https://www.wallet.allianza.tech",
@@ -133,32 +134,7 @@ CORS(app, resources={
     }
 })
 
-# ✅ MIDDLEWARE CORS MANUAL CORRIGIDO
-@app.after_request
-def after_request(response):
-    origin = request.headers.get('Origin', '')
-    allowed_origins = [
-        "https://allianza.tech",
-        "https://www.allianza.tech",
-        "https://wallet.allianza.tech", 
-        "https://www.wallet.allianza.tech",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:3000",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174"
-    ]
-    
-    # ✅ CORREÇÃO: Remover duplicação - usar apenas um método
-    if origin in allowed_origins:
-        response.headers['Access-Control-Allow-Origin'] = origin
-    
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers'
-    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD'
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Max-Age'] = '3600'
-    
-    return response
+
 
 # ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
 @app.route('/api/site/admin/payments', methods=['OPTIONS'])
@@ -166,6 +142,7 @@ def after_request(response):
 @app.route('/api/site/admin/process-payments', methods=['OPTIONS']) 
 @app.route('/api/site/admin/manual-token-send', methods=['OPTIONS'])
 @app.route('/api/site/admin/debug-token', methods=['OPTIONS'])
+@app.route('/health', methods=['OPTIONS'])
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])
@@ -1425,7 +1402,8 @@ def system_info():
             "http://localhost:5174",
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
-            "https://allianza.tech", 
+            "https://allianza.tech",
+            "https://admin.allianza.tech", 
             "https://wallet.allianza.tech"
         ]
     } ), 200
