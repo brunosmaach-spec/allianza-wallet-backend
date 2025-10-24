@@ -131,9 +131,9 @@ CORS(app, resources={
         "supports_credentials": True,
         "max_age": 3600
     }
-} )
+})
 
-# ✅ MIDDLEWARE CORS MANUAL PARA GARANTIR
+# ✅ MIDDLEWARE CORS MANUAL CORRIGIDO
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin', '')
@@ -149,13 +149,14 @@ def after_request(response):
         "http://127.0.0.1:5174"
     ]
     
+    # ✅ CORREÇÃO: Remover duplicação - usar apenas um método
     if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin )
+        response.headers['Access-Control-Allow-Origin'] = origin
     
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    response.headers.add('Access-Control-Max-Age', '3600')
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,X-Requested-With,Accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS,PATCH,HEAD'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Max-Age'] = '3600'
     
     return response
 
@@ -168,8 +169,8 @@ def after_request(response):
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])
-@app.route('/api/nowpayments/check-config', methods=['OPTIONS'])  # ✅ NOVO
-@app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])  # ✅ NOVO
+@app.route('/api/nowpayments/check-config', methods=['OPTIONS'])
+@app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])
 
 def options_handler():
     return '', 200
@@ -233,6 +234,7 @@ def process_automatic_payment(email, amount, method, external_id):
         cursor.execute("BEGIN")
         
         print(f"🔄 Processando pagamento automático: {email} - {amount} ALZ - {method}")
+        print(f"💰 Valor a creditar: {amount} ALZ")
         
         # Registrar pagamento
         cursor.execute(
@@ -247,6 +249,9 @@ def process_automatic_payment(email, amount, method, external_id):
         user = cursor.fetchone()
         
         user_created = False
+        wallet_address = None
+        user_id = None
+        
         if not user:
             # Criar usuário automaticamente
             private_key, wallet_address = generate_polygon_wallet()
@@ -290,11 +295,6 @@ def process_automatic_payment(email, amount, method, external_id):
 
         # ✅ COMPENSAÇÃO DE TAXAS PARA CRIPTO
         if method == 'crypto':
-            # 1 ALZ = R$ 0.10. A taxa é 2% do valor em BRL.
-            # Valor em BRL = amount * 0.10
-            # Taxa em BRL = Valor em BRL * 0.02
-            # Taxa em ALZ = Taxa em BRL / 0.10 = (amount * 0.10 * 0.02) / 0.10 = amount * 0.02
-            
             bonus_amount = float(amount) * 0.02
             
             cursor.execute(
@@ -361,11 +361,8 @@ def site_purchase():
     try:
         cursor.execute("BEGIN")
         
-        # 1. Registrar pagamento PRIMEIRO (SEMPRE PENDENTE)
-        # O frontend envia o 'amount' em ALZ (amount * 10), então precisamos reverter para BRL para o registro inicial.
-        # Taxa de conversão: 1 ALZ = R$ 0.10. Então, BRL = ALZ * 0.10.
-        
-        # O valor em BRL é:
+        # ✅ CORREÇÃO: Registrar o valor EM ALZ diretamente no metadata
+        # O valor em BRL para registro é calculado como: ALZ * 0.10
         brl_amount_for_db = float(amount) * 0.10
         
         cursor.execute(
@@ -373,6 +370,8 @@ def site_purchase():
             (email, brl_amount_for_db, method, json.dumps({'alz_amount': float(amount)}))
         )
         payment_id = cursor.fetchone()['id']
+        
+        print(f"💰 Compra registrada: {amount} ALZ = R$ {brl_amount_for_db} | ID: {payment_id}")
         
         # 2. Buscar usuário existente
         cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
@@ -432,7 +431,6 @@ def site_purchase():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
-# Continuação do backend_wallet_integration.py
 
 # 💳 ROTA PARA CRIAR SESSÃO STRIPE - PRODUÇÃO
 @app.route('/create-checkout-session', methods=['POST'])
@@ -801,7 +799,6 @@ def test_nowpayments_webhook():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-# Continuação do backend_wallet_integration.py
 
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 @app.route('/api/site/admin/payments', methods=['GET'])
@@ -1038,6 +1035,102 @@ def site_admin_process_payments():
         print(f"❌ Erro geral process-payments: {e}")
         return jsonify({"error": str(e)}), 500
 
+# 🚀 ENVIO MANUAL DE TOKENS (ADMIN)
+@app.route('/api/site/admin/manual-token-send', methods=['POST'])
+def site_admin_manual_token_send():
+    """Envio manual de tokens por administrador"""
+    try:
+        auth_header = request.headers.get('Authorization', '')
+        
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Token não fornecido"}), 401
+        
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        expected_token = SITE_ADMIN_TOKEN
+        
+        if not admin_token or admin_token != expected_token:
+            return jsonify({"error": "Token inválido"}), 401
+        
+        data = request.json
+        email = data.get('email')
+        amount = data.get('amount')
+        description = data.get('description', 'Crédito administrativo manual')
+        admin_user = data.get('admin_user', 'admin')
+        
+        if not email or not amount:
+            return jsonify({"error": "Email e quantidade são obrigatórios"}), 400
+        
+        try:
+            amount = float(amount)
+        except ValueError:
+            return jsonify({"error": "Quantidade inválida"}), 400
+        
+        if amount <= 0:
+            return jsonify({"error": "Quantidade deve ser positiva"}), 400
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            
+            # Buscar usuário
+            cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
+            user = cursor.fetchone()
+            
+            if not user:
+                return jsonify({"error": "Usuário não encontrado"}), 404
+            
+            user_id = user['id']
+            
+            # Verificar/criar saldo
+            cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+                    (user_id, 0.0)
+                )
+            
+            # Creditar tokens
+            cursor.execute(
+                "UPDATE balances SET available = available + %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
+                (amount, user_id)
+            )
+            
+            # Registrar no ledger
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s)",
+                (user_id, 'ALZ', amount, 'manual_credit', description, f'manual_{user_id}_{int(time.time())}')
+            )
+            
+            # Registrar log administrativo
+            cursor.execute(
+                "INSERT INTO admin_logs (admin_user, action, description, target_id) VALUES (%s, %s, %s, %s)",
+                (admin_user, 'manual_token_send', f'Enviou {amount} ALZ para {email}', user_id)
+            )
+            
+            conn.commit()
+            
+            print(f"✅ Envio manual realizado: {amount} ALZ para {email}")
+            
+            return jsonify({
+                "success": True,
+                "message": f"{amount} ALZ enviados com sucesso para {email}",
+                "amount": amount,
+                "email": email
+            }), 200
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro no envio manual: {e}")
+            return jsonify({"error": str(e)}), 500
+        finally:
+            conn.close()
+            
+    except Exception as e:
+        print(f"❌ Erro geral envio manual: {e}")
+        return jsonify({"error": str(e)}), 500
+
 # ===== ROTAS EXISTENTES DA WALLET =====
 
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
@@ -1049,7 +1142,6 @@ def get_user_id_from_token(token):
     except (ValueError, IndexError):
         pass
     return None
-# Continuação do backend_wallet_integration.py
 
 # 🔒 Middleware de Autenticação (aplicado globalmente, exceto para rotas públicas)
 @app.before_request
@@ -1439,6 +1531,7 @@ if __name__ == '__main__':
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
     print("   - POST /api/site/admin/process-payments")
+    print("   - POST /api/site/admin/manual-token-send")
     print("📞 Webhooks:")
     print("   - POST /webhook/stripe")
     print("   - POST /webhook/nowpayments")
