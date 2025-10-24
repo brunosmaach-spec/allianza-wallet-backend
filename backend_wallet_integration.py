@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO)
+# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO E CORRIGIDO)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -77,7 +77,7 @@ if STRIPE_AVAILABLE:
             if stripe_secret_key.startswith('sk_live_'):
                 print("🎉 STRIPE EM MODO PRODUÇÃO! Pagamentos reais ativados!")
             else:
-                print("🔧 STRIPE EM MODO TESTE")
+                print("🔒 STRIPE EM MODO TESTE")
             print("📦 Versão Stripe: 8.0.0")
         else:
             print("❌ STRIPE_SECRET_KEY não encontrada")
@@ -86,7 +86,7 @@ if STRIPE_AVAILABLE:
         print(f"❌ Erro configuração Stripe: {e}")
         STRIPE_AVAILABLE = False
 else:
-    print("🔴 STRIPE NÃO DISPONÍVEL - Pagamentos com cartão desativados")
+    print("⚠️ STRIPE NÃO DISPONÍVEL - Pagamentos com cartão desativados")
 
 # Importar funções do banco
 try:
@@ -104,11 +104,6 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 app = Flask(__name__)
 
 # ✅ CONFIGURAÇÃO CORS CORRIGIDA (SOLUÇÃO DEFINITIVA)
-# Esta configuração substitui qualquer outra chamada CORS(app) e define as origens exatas.
-# O erro "The 'Access-Control-Allow-Origin' header contains multiple values" sugere que o Flask-CORS
-# está sendo chamado mais de uma vez ou que o ambiente de hospedagem (Render) está adicionando o cabeçalho
-# e o Flask-CORS está adicionando novamente.
-# A solução é garantir uma única chamada CORS(app) com a lista exata de origens permitidas.
 CORS(app, resources={r"/*": {
     "origins": [
         "https://allianza.tech",        # site oficial
@@ -128,16 +123,6 @@ CORS(app, resources={r"/*": {
     "supports_credentials": True,
     "max_age": 3600
 }})
-
-# ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
-# As rotas OPTIONS abaixo estão corretas e não devem ser a causa da duplicação de cabeçalho.
-# O erro é: The 'Access-Control-Allow-Origin' header contains multiple values 'http://localhost:5174, http://localhost:5174', but only one is allowed.
-# Isso sugere que o cabeçalho está sendo adicionado duas vezes, e ambas as vezes com o valor 'http://localhost:5174'.
-# A duplicação pode estar vindo do ambiente de hospedagem (Render) ou de um middleware não visível.
-
-# ✅ VERIFICAR SE O PROBLEMA É NO NowPayments
-# O erro ocorre na rota '/api/nowpayments/create-invoice'. Vamos ler essa rota para ver se há algo que possa estar causando o problema.
-
 
 # ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
 @app.route('/api/site/admin/payments', methods=['OPTIONS'])
@@ -166,8 +151,6 @@ SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTER
 
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
-
-
 
 # ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE (CORRIGIDO)
 print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
@@ -330,9 +313,9 @@ def process_automatic_payment(email, amount, method, external_id):
             )
             cursor.execute(
                 "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                (user_id, 'ALZ', bonus_amount, 'fee_compensation', payment_id, '🎁 Bônus compensação de taxa crypto', f'fee_comp_{payment_id}')
+                (user_id, 'ALZ', bonus_amount, 'fee_compensation', payment_id, '🎉 Bônus compensação de taxa crypto', f'fee_comp_{payment_id}')
             )
-            print(f"🎁 Bônus aplicado para {email}: +{bonus_amount} ALZ")
+            print(f"🎉 Bônus aplicado para {email}: +{bonus_amount} ALZ")
 
         cursor.execute("COMMIT")
         return {"success": True, "user_created": user_created, "wallet_address": wallet_address}
@@ -459,9 +442,8 @@ def site_purchase():
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
-# Continuação do backend_wallet_integration.py
 
-# 💳 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO
+# 💰 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO (APENAS UMA VEZ)
 @app.route('/api/nowpayments/create-invoice', methods=['POST'])
 def create_nowpayments_invoice():
     """Cria uma fatura no NowPayments e retorna o link de pagamento."""
@@ -611,7 +593,7 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
-# 🎣 WEBHOOK STRIPE
+# 🙏 WEBHOOK STRIPE
 @app.route('/webhook/stripe', methods=['POST'])
 def stripe_webhook():
     """Receber eventos do Stripe"""
@@ -654,7 +636,7 @@ def stripe_webhook():
 
     return 'OK', 200
 
-# 🔑 FUNÇÕES AUXILIARES NOWPAYMENTS
+# 🔍 FUNÇÕES AUXILIARES NOWPAYMENTS
 def verify_nowpayments_signature(payload, signature):
     """Verifica a assinatura IPN da NowPayments"""
     if not signature:
@@ -750,7 +732,7 @@ def nowpayments_webhook():
         payload_bytes = request.get_data()
         received_signature = request.headers.get('x-nowpayments-ipn-signature')
         
-        print(f"📍 URL Recebida: {request.url}")
+        print(f"📌 URL Recebida: {request.url}")
         print(f"📧 Host: {request.headers.get('Host')}")
         print(f"🔑 Assinatura: {received_signature}")
         print(f"📦 Tamanho do payload: {len(payload_bytes)} bytes")
@@ -869,7 +851,7 @@ def nowpayments_webhook():
                     (payment_status, tx_hash, db_payment_id) # Usando tx_hash
                 )
                 conn.commit()
-                print(f"🔴 Pagamento ID {db_payment_id} falhou/expirou. Status: {payment_status}")
+                print(f"⚠️ Pagamento ID {db_payment_id} falhou/expirou. Status: {payment_status}")
                 return 'Payment failed', 200
             
             else:
@@ -931,106 +913,8 @@ def test_nowpayments_webhook():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-# Continuação do backend_wallet_integration.py
 
-# 💳 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO
-@app.route('/api/nowpayments/create-invoice', methods=['POST'])
-def create_nowpayments_invoice():
-    """Cria uma fatura no NowPayments e retorna o link de pagamento."""
-    
-    NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
-    
-    if not NOWPAYMENTS_API_KEY:
-        print("❌ NOWPAYMENTS_API_KEY não configurada")
-        return jsonify({"error": "Configuração NowPayments ausente"}), 500
-        
-    try:
-        data = request.json
-        payment_id = data.get('payment_id')
-        amount_usd_str = data.get('amount_usd')
-        email = data.get('email')
-        
-        if not payment_id or not amount_usd_str or not email:
-            return jsonify({"error": "payment_id, amount_usd e email são obrigatórios"}), 400
-            
-        try:
-            # Conversão explícita para float para garantir o formato correto
-            # O frontend já garante que o valor é uma string com 2 casas decimais.
-            amount_usd = float(amount_usd_str)
-        except ValueError:
-            print(f"❌ Erro de conversão: amount_usd_str='{amount_usd_str}' não é um número válido.")
-            return jsonify({"error": "Valor de USD inválido"}), 400
-            
-        # 1. Obter o IPN Secret (não é necessário para a criação da fatura, mas bom ter)
-        # O NOWPAYMENTS_API_KEY já foi carregado no escopo global
-        
-        # 2. Chamar a API do NowPayments
-        headers = {
-            'x-api-key': NOWPAYMENTS_API_KEY,
-            'Content-Type': 'application/json'
-        }
-        
-        # O NowPayments espera o valor em USD para a fatura
-        payload = {
-            "price_amount": amount_usd,
-            "price_currency": "usd",
-            "pay_currency": "btc", # Deixar o NowPayments escolher a melhor
-            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
-            "order_id": str(payment_id),
-            "order_description": f"Compra de ALZ por {email} - ID: {payment_id}",
-            "success_url": "https://allianza.tech/success",
-            "cancel_url": "https://allianza.tech/cancel",
-            "payout_address": None, # Pagamento direto para a conta NowPayments
-            "payout_currency": None,
-            "extra_id": email
-        }
-        
-        NOWPAYMENTS_URL = "https://api.nowpayments.io/v1/invoice"
-        
-        print(f"🔄 Enviando requisição NowPayments para {NOWPAYMENTS_URL}...")
-        print(f"DEBUG PAYLOAD: {payload}") # Log do payload
-        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload)
-        
-        if response.status_code != 201:
-            print(f"❌ Erro NowPayments: Status {response.status_code} - {response.text}")
-            return jsonify({"error": "Falha ao criar fatura NowPayments", "details": response.json()}), 500
-            
-        invoice_data = response.json()
-        
-        # 3. Atualizar o registro de pagamento com os dados da fatura
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("BEGIN")
-            
-            # O metadata é atualizado com || para preservar dados anteriores (como alz_amount)
-            cursor.execute(
-                "UPDATE payments SET method = %s, metadata = metadata || %s WHERE id = %s",
-                ('nowpayments', json.dumps({"invoice_id": invoice_data.get('id'), "payment_url": invoice_data.get('invoice_url')}) , payment_id)
-            )
-            
-            conn.commit()
-            
-            return jsonify({
-                "success": True,
-                "invoice_url": invoice_data.get('invoice_url'),
-                "invoice_id": invoice_data.get('id'),
-                "payment_id": payment_id
-            }), 200
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ Erro ao atualizar pagamento com dados NowPayments: {e}")
-            return jsonify({"error": "Erro interno ao salvar dados da fatura"}), 500
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        print(f"❌ Erro geral ao criar fatura NowPayments: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
+# 🔧 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
     """Listar pagamentos para o admin do site - PRODUÇÃO"""
@@ -1039,7 +923,7 @@ def site_admin_payments():
         
         print("=" * 50)
         print("🔐 ADMIN PAYMENTS - VERIFICAÇÃO DE TOKEN")
-        print(f"📨 Header: {auth_header}")
+        print(f"📞 Header: {auth_header}")
         
         if not auth_header.startswith('Bearer '):
             print("❌ Header não começa com Bearer")
@@ -1104,7 +988,7 @@ def site_admin_payments():
         if 'conn' in locals():
             conn.close()
 
-# 🔄 Rota para estatísticas do admin do site - PRODUÇÃO
+# 📊 Rota para estatísticas do admin do site - PRODUÇÃO
 @app.route('/api/site/admin/stats', methods=['GET'])
 def site_admin_stats():
     """Estatísticas para o admin do site - PRODUÇÃO"""
@@ -1233,9 +1117,9 @@ def site_admin_process_payments():
                         )
                         cursor.execute(
                             "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, related_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎁 Bônus compensação de taxa crypto', payment_id)
+                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎉 Bônus compensação de taxa crypto', payment_id)
                         )
-                        print(f"🎁 Bônus aplicado para {payment['email']}: +{bonus_amount} ALZ")
+                        print(f"🎉 Bônus aplicado para {payment['email']}: +{bonus_amount} ALZ")
                     
                     # Atualizar status
                     cursor.execute(
@@ -1267,7 +1151,7 @@ def site_admin_process_payments():
 
 # ===== ROTAS EXISTENTES DA WALLET =====
 
-# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
+# 🔧 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
 def get_user_id_from_token(token):
     try:
         parts = token.split("_")
@@ -1276,104 +1160,6 @@ def get_user_id_from_token(token):
     except (ValueError, IndexError):
         pass
     return None
-# Continuação do backend_wallet_integration.py
-
-# 💳 ROTA PARA CRIAR FATURA NOWPAYMENTS - PRODUÇÃO
-@app.route('/api/nowpayments/create-invoice', methods=['POST'])
-def create_nowpayments_invoice():
-    """Cria uma fatura no NowPayments e retorna o link de pagamento."""
-    
-    NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
-    
-    if not NOWPAYMENTS_API_KEY:
-        print("❌ NOWPAYMENTS_API_KEY não configurada")
-        return jsonify({"error": "Configuração NowPayments ausente"}), 500
-        
-    try:
-        data = request.json
-        payment_id = data.get('payment_id')
-        amount_usd_str = data.get('amount_usd')
-        email = data.get('email')
-        
-        if not payment_id or not amount_usd_str or not email:
-            return jsonify({"error": "payment_id, amount_usd e email são obrigatórios"}), 400
-            
-        try:
-            # Conversão explícita para float para garantir o formato correto
-            # O frontend já garante que o valor é uma string com 2 casas decimais.
-            amount_usd = float(amount_usd_str)
-        except ValueError:
-            print(f"❌ Erro de conversão: amount_usd_str='{amount_usd_str}' não é um número válido.")
-            return jsonify({"error": "Valor de USD inválido"}), 400
-            
-        # 1. Obter o IPN Secret (não é necessário para a criação da fatura, mas bom ter)
-        # O NOWPAYMENTS_API_KEY já foi carregado no escopo global
-        
-        # 2. Chamar a API do NowPayments
-        headers = {
-            'x-api-key': NOWPAYMENTS_API_KEY,
-            'Content-Type': 'application/json'
-        }
-        
-        # O NowPayments espera o valor em USD para a fatura
-        payload = {
-            "price_amount": amount_usd,
-            "price_currency": "usd",
-            "pay_currency": "btc", # Deixar o NowPayments escolher a melhor
-            "ipn_callback_url": f"https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
-            "order_id": str(payment_id),
-            "order_description": f"Compra de ALZ por {email} - ID: {payment_id}",
-            "success_url": "https://allianza.tech/success",
-            "cancel_url": "https://allianza.tech/cancel",
-            "payout_address": None, # Pagamento direto para a conta NowPayments
-            "payout_currency": None,
-            "extra_id": email
-        }
-        
-        NOWPAYMENTS_URL = "https://api.nowpayments.io/v1/invoice"
-        
-        print(f"🔄 Enviando requisição NowPayments para {NOWPAYMENTS_URL}...")
-        print(f"DEBUG PAYLOAD: {payload}") # Log do payload
-        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload)
-        
-        if response.status_code != 201:
-            print(f"❌ Erro NowPayments: Status {response.status_code} - {response.text}")
-            return jsonify({"error": "Falha ao criar fatura NowPayments", "details": response.json()}), 500
-            
-        invoice_data = response.json()
-        
-        # 3. Atualizar o registro de pagamento com os dados da fatura
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("BEGIN")
-            
-            # O metadata é atualizado com || para preservar dados anteriores (como alz_amount)
-            cursor.execute(
-                "UPDATE payments SET method = %s, metadata = metadata || %s WHERE id = %s",
-                ('nowpayments', json.dumps({"invoice_id": invoice_data.get('id'), "payment_url": invoice_data.get('invoice_url')}) , payment_id)
-            )
-            
-            conn.commit()
-            
-            return jsonify({
-                "success": True,
-                "invoice_url": invoice_data.get('invoice_url'),
-                "invoice_id": invoice_data.get('id'),
-                "payment_id": payment_id
-            }), 200
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ Erro ao atualizar pagamento com dados NowPayments: {e}")
-            return jsonify({"error": "Erro interno ao salvar dados da fatura"}), 500
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        print(f"❌ Erro geral ao criar fatura NowPayments: {e}")
-        return jsonify({"error": str(e)}), 500
 
 # 🔒 Middleware de Autenticação (aplicado globalmente, exceto para rotas públicas)
 @app.before_request
@@ -1521,7 +1307,7 @@ def login_user():
     finally:
         conn.close()
 
-# ⚙️ ROTA DE SETUP INICIAL (PARA USUÁRIOS CRIADOS VIA COMPRA)
+# 🔄 ROTA DE SETUP INICIAL (PARA USUÁRIOS CRIADOS VIA COMPRA)
 @app.route("/first-time-setup", methods=["POST"])
 def first_time_setup():
     data = request.json
@@ -1763,7 +1549,7 @@ if __name__ == '__main__':
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
     print("   - POST /api/site/admin/process-payments")
-    print("📞 Webhooks:")
+    print("📡 Webhooks:")
     print("   - POST /webhook/stripe")
     print("   - POST /webhook/nowpayments")
     print("💰 Rotas protegidas:")
