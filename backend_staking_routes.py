@@ -1,6 +1,8 @@
+# backend_staking_routes.py - CORREÇÃO DA FUNÇÃO safe_datetime_diff
 from flask import Blueprint, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
+import math
 from database_neon import get_db_connection
 
 staking_bp = Blueprint("staking", __name__)
@@ -20,22 +22,67 @@ def get_user_id_from_token():
         pass
     return None
 
-# Opções de staking com APYs
+# ✅ OPÇÕES DE STAKING MELHORADAS - APYs COMPETITIVOS
 staking_options = [
-    {"duration": 30, "apy": 120.0, "label": "30 dias", "multiplier": 1.0},
-    {"duration": 90, "apy": 180.0, "label": "90 dias", "multiplier": 1.2},
-    {"duration": 180, "apy": 250.0, "label": "180 dias", "multiplier": 1.5},
-    {"duration": 365, "apy": 400.0, "label": "1 ano", "multiplier": 2.0}
+    {"duration": 7, "apy": 80.0, "label": "7 dias", "multiplier": 0.8, "early_withdrawal_penalty": 0.10},
+    {"duration": 30, "apy": 120.0, "label": "30 dias", "multiplier": 1.0, "early_withdrawal_penalty": 0.08},
+    {"duration": 90, "apy": 180.0, "label": "90 dias", "multiplier": 1.2, "early_withdrawal_penalty": 0.05},
+    {"duration": 180, "apy": 250.0, "label": "180 dias", "multiplier": 1.5, "early_withdrawal_penalty": 0.03},
+    {"duration": 365, "apy": 400.0, "label": "1 ano", "multiplier": 2.0, "early_withdrawal_penalty": 0.02},
 ]
 
-def calculate_rewards(amount, duration, apy, auto_compound=False):
-    """Calcular recompensas de staking"""
+# ✅ TOKENS SUPORTADOS PARA STAKING
+supported_tokens = {
+    "ALZ": {"name": "Allianza Token", "min_stake": 10.0, "apy_boost": 1.2},
+    "BTC": {"name": "Bitcoin", "min_stake": 0.001, "apy_boost": 1.0},
+    "ETH": {"name": "Ethereum", "min_stake": 0.01, "apy_boost": 1.0},
+    "ADA": {"name": "Cardano", "min_stake": 100.0, "apy_boost": 1.1},
+    "SOL": {"name": "Solana", "min_stake": 1.0, "apy_boost": 1.15},
+    "DOT": {"name": "Polkadot", "min_stake": 10.0, "apy_boost": 1.1},
+}
+
+def calculate_compounded_rewards(amount, duration, apy, auto_compound=False):
+    """Calcular recompensas com compound automático"""
     daily_rate = apy / 365 / 100
+    
     if auto_compound:
         total_amount = amount * ((1 + daily_rate) ** duration)
         return total_amount - amount
     else:
         return amount * daily_rate * duration
+
+def calculate_actual_apy(base_apy, token, duration, auto_compound):
+    """Calcular APY real considerando boosts e compound"""
+    token_boost = supported_tokens.get(token, {}).get("apy_boost", 1.0)
+    duration_boost = 1.0 + (duration / 365) * 0.5
+    
+    base_rate = base_apy * token_boost * duration_boost
+    
+    if auto_compound:
+        daily_rate = base_rate / 365 / 100
+        compounded_apy = ((1 + daily_rate) ** 365 - 1) * 100
+        return min(compounded_apy, 1000.0)
+    else:
+        return base_rate
+
+def safe_datetime_diff(dt1, dt2):
+    """Calcular diferença entre datetimes de forma segura - CORREÇÃO CRÍTICA"""
+    # Converter ambos para UTC se tiverem timezone, ou para naive se não tiverem
+    if dt1.tzinfo is not None:
+        dt1 = dt1.astimezone(timezone.utc).replace(tzinfo=None)
+    if dt2.tzinfo is not None:
+        dt2 = dt2.astimezone(timezone.utc).replace(tzinfo=None)
+    
+    return dt1 - dt2
+
+def safe_days_remaining(end_date, current_date=None):
+    """Calcular dias restantes de forma segura"""
+    if current_date is None:
+        current_date = datetime.now(timezone.utc)
+    
+    # Usar a função safe_datetime_diff corrigida
+    time_diff = safe_datetime_diff(end_date, current_date)
+    return max(0, time_diff.days)
 
 @staking_bp.route("/stake", methods=["POST"])
 def stake():
@@ -47,56 +94,76 @@ def stake():
     data = request.get_json()
     amount = float(data.get("amount", 0))
     duration = int(data.get("duration", 30))
-    apy = float(data.get("apy", 120.0))
+    token = data.get("token", "ALZ")
     auto_compound = data.get("auto_compound", False)
 
-    print(f"[STAKING] Requisição recebida - User: {user_id}, Amount: {amount}, Duration: {duration}")
+    print(f"[STAKING] Requisição recebida - User: {user_id}, Amount: {amount}, Token: {token}, Duration: {duration}")
 
     if amount <= 0:
         return jsonify({"error": "Valor de staking deve ser positivo"}), 400
+
+    if token not in supported_tokens:
+        return jsonify({"error": f"Token {token} não suportado para staking"}), 400
+
+    min_stake = supported_tokens[token]["min_stake"]
+    if amount < min_stake:
+        return jsonify({"error": f"Valor mínimo para staking de {token} é {min_stake}"}), 400
+
+    staking_option = next((opt for opt in staking_options if opt["duration"] == duration), None)
+    if not staking_option:
+        return jsonify({"error": "Duração de staking não suportada"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
     
     try:
-        # Verificar saldo disponível
-        cursor.execute("SELECT available FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user_id,))
+        cursor.execute("SELECT available FROM balances WHERE user_id = %s AND asset = %s", (user_id, token))
         balance_result = cursor.fetchone()
         
         if not balance_result or balance_result['available'] < amount:
-            return jsonify({"error": "Saldo insuficiente para staking"}), 400
+            return jsonify({"error": f"Saldo insuficiente de {token} para staking"}), 400
 
-        available_balance = float(balance_result['available'])
-        
         cursor.execute("BEGIN")
 
-        # Gerar ID único para o stake
-        stake_id = str(uuid.uuid4())
-        start_date = datetime.now()
+        base_apy = staking_option["apy"]
+        actual_apy = calculate_actual_apy(base_apy, token, duration, auto_compound)
+        estimated_reward = calculate_compounded_rewards(amount, duration, actual_apy, auto_compound)
+
+        stake_id = f"stk_{uuid.uuid4().hex[:16]}"
+        start_date = datetime.now(timezone.utc)
         end_date = start_date + timedelta(days=duration)
-        estimated_reward = calculate_rewards(amount, duration, apy, auto_compound)
 
-        print(f"[STAKING] Criando stake: {stake_id}")
+        print(f"[STAKING] Criando stake: {stake_id} - APY: {actual_apy:.2f}%")
 
-        # 1. Registrar no ledger (saída do saldo disponível)
+        # 1. Registrar no ledger
         cursor.execute(
             "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
-            (user_id, "ALZ", -amount, "stake_lock", stake_id, f"Staking de {amount} ALZ por {duration} dias")
+            (user_id, token, -amount, "stake_lock", stake_id, 
+             f"Staking de {amount} {token} por {duration} dias (APY: {actual_apy:.2f}%)")
         )
 
-        # 2. Atualizar saldos (mover de available para staking_balance)
+        # 2. Atualizar saldos
         cursor.execute(
-            "UPDATE balances SET available = available - %s, staking_balance = staking_balance + %s WHERE user_id = %s AND asset = 'ALZ'",
-            (amount, amount, user_id)
+            "UPDATE balances SET available = available - %s, staking_balance = staking_balance + %s WHERE user_id = %s AND asset = %s",
+            (amount, amount, user_id, token)
         )
 
         # 3. Criar registro de stake
         cursor.execute(
-            """INSERT INTO stakes (id, user_id, amount, duration, apy, start_date, end_date, 
-                estimated_reward, accrued_reward, status, auto_compound, last_reward_claim, days_remaining) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (stake_id, user_id, amount, duration, apy, start_date, end_date, 
-             round(estimated_reward, 6), 0.0, "active", auto_compound, start_date, duration)
+            """INSERT INTO stakes (id, user_id, asset, amount, duration, apy, start_date, end_date, 
+                estimated_reward, accrued_reward, status, auto_compound, last_reward_claim, days_remaining,
+                early_withdrawal_penalty, metadata) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (stake_id, user_id, token, amount, duration, actual_apy, start_date, end_date, 
+             round(estimated_reward, 6), 0.0, "active", auto_compound, start_date, duration,
+             staking_option["early_withdrawal_penalty"],
+             {
+                 "token_name": supported_tokens[token]["name"],
+                 "base_apy": base_apy,
+                 "actual_apy": actual_apy,
+                 "auto_compound": auto_compound,
+                 "option_label": staking_option["label"]
+             })
         )
 
         conn.commit()
@@ -104,9 +171,11 @@ def stake():
         new_stake = {
             "id": stake_id,
             "userId": user_id,
+            "asset": token,
             "amount": amount,
             "duration": duration,
-            "apy": apy,
+            "apy": round(actual_apy, 2),
+            "baseApy": base_apy,
             "startDate": start_date.isoformat(),
             "endDate": end_date.isoformat(),
             "estimatedReward": round(estimated_reward, 6),
@@ -114,12 +183,16 @@ def stake():
             "status": "active",
             "autoCompound": auto_compound,
             "lastRewardClaim": start_date.isoformat(),
-            "daysRemaining": duration
+            "daysRemaining": duration,
+            "earlyWithdrawalPenalty": staking_option["early_withdrawal_penalty"],
+            "tokenName": supported_tokens[token]["name"]
         }
 
         return jsonify({
-            "message": "Staking iniciado com sucesso!", 
-            "stake": new_stake
+            "message": f"Staking de {token} iniciado com sucesso!",
+            "stake": new_stake,
+            "estimated_apy": f"{actual_apy:.2f}%",
+            "estimated_rewards": f"{estimated_reward:.6f} {token}"
         }), 201
 
     except Exception as e:
@@ -131,13 +204,14 @@ def stake():
 
 @staking_bp.route("/unstake", methods=["POST"])
 def unstake():
-    """Retirar staking (com penalidade se antecipado)"""
+    """Retirar staking com penalidades claras"""
     user_id = get_user_id_from_token()
     if not user_id:
         return jsonify({"error": "Usuário não autenticado"}), 401
     
     data = request.get_json()
     stake_id = data.get("stake_id")
+    confirm_early_withdrawal = data.get("confirm_early_withdrawal", False)
     
     print(f"[UNSTAKE] Requisição - User: {user_id}, Stake: {stake_id}")
 
@@ -157,54 +231,69 @@ def unstake():
         if stake["status"] != "active":
             return jsonify({"error": "Stake não está ativo"}), 400
 
-        # Calcular penalidade por retirada antecipada
-        start_date = stake["start_date"]
-        end_date = stake["end_date"]
-        now = datetime.now()
+        # Usar função segura para calcular dias restantes
+        days_remaining = safe_days_remaining(stake["end_date"])
         
-        days_remaining = (end_date - now).days
-        penalty = 0.0
-        return_amount = float(stake["amount"])
+        is_early_withdrawal = days_remaining > 0
+        penalty_rate = float(stake["early_withdrawal_penalty"]) if is_early_withdrawal else 0.0
+        penalty_amount = float(stake["amount"]) * penalty_rate if is_early_withdrawal else 0.0
+        
+        return_amount = float(stake["amount"]) - penalty_amount
         accrued_reward = float(stake["accrued_reward"])
 
-        # Aplicar penalidade de 5% se retirada antecipada
-        if days_remaining > 0:
-            penalty = return_amount * 0.05  # 5% de penalidade
-            return_amount -= penalty
-            penalty_message = f" (penalidade de 5%: {penalty} ALZ)"
-        else:
-            penalty_message = ""
+        if is_early_withdrawal and not confirm_early_withdrawal:
+            return jsonify({
+                "requires_confirmation": True,
+                "warning": "RETIRADA ANTECIPADA DETECTADA",
+                "penalty_rate": f"{penalty_rate * 100}%",
+                "penalty_amount": penalty_amount,
+                "original_amount": float(stake["amount"]),
+                "return_amount": return_amount,
+                "accrued_rewards": accrued_reward,
+                "message": "Confirmação de retirada antecipada necessária."
+            }), 400 # 400 para indicar que a requisição precisa de um parâmetro extra
 
         cursor.execute("BEGIN")
 
-        # 1. Registrar no ledger (entrada do valor retornado + recompensas)
-        total_return = return_amount + accrued_reward
+        # 1. Registrar no ledger (devolução do principal)
         cursor.execute(
             "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
-            (user_id, "ALZ", total_return, "unstake", stake_id,
-             f"Unstaking de {stake['amount']} ALZ{penalty_message} + {accrued_reward} ALZ de recompensas")
+            (user_id, stake["asset"], return_amount, "unstake_principal", stake_id, 
+             f"Retirada do principal do staking {stake_id} (Penalidade: {penalty_amount:.6f})")
         )
 
-        # 2. Atualizar saldos (mover de staking_balance para available)
+        # 2. Registrar no ledger (recompensa acumulada)
+        if accrued_reward > 0:
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
+                (user_id, stake["asset"], accrued_reward, "unstake_reward", stake_id, 
+                 f"Recompensa acumulada do staking {stake_id}")
+            )
+
+        # 3. Atualizar saldos (devolver principal + recompensa)
+        total_return = return_amount + accrued_reward
         cursor.execute(
-            "UPDATE balances SET available = available + %s, staking_balance = staking_balance - %s WHERE user_id = %s AND asset = 'ALZ'",
-            (total_return, stake['amount'], user_id)
+            "UPDATE balances SET available = available + %s, staking_balance = staking_balance - %s WHERE user_id = %s AND asset = %s",
+            (total_return, stake["amount"], user_id, stake["asset"])
         )
 
-        # 3. Atualizar status do stake
+        # 4. Atualizar registro de stake
+        new_status = "withdrawn_early" if is_early_withdrawal else "withdrawn_mature"
+        now = datetime.now(timezone.utc)
         cursor.execute(
-            "UPDATE stakes SET status = 'withdrawn', accrued_reward = 0, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-            (stake_id,)
+            "UPDATE stakes SET status = %s, actual_return = %s, penalty_applied = %s, withdrawn_at = %s WHERE id = %s",
+            (new_status, total_return, penalty_amount, now, stake_id)
         )
 
         conn.commit()
 
         return jsonify({
-            "message": "Staking retirado com sucesso!",
+            "message": f"Staking {stake_id} retirado com sucesso.",
+            "total_received": total_return,
             "returned_amount": return_amount,
             "accrued_rewards": accrued_reward,
-            "penalty": penalty,
-            "total_received": total_return
+            "penalty_applied": penalty_amount,
+            "status": new_status
         }), 200
 
     except Exception as e:
@@ -214,21 +303,85 @@ def unstake():
     finally:
         conn.close()
 
+def update_stake_rewards(stake_id):
+    """Função interna para calcular e atualizar recompensas de um stake"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("SELECT * FROM stakes WHERE id = %s AND status = 'active'", (stake_id,))
+        stake = cursor.fetchone()
+        
+        if not stake:
+            return False
+
+        current_date = datetime.now(timezone.utc)
+        
+        # 1. Calcular dias desde a última atualização/início
+        # Usar a função safe_datetime_diff corrigida
+        time_since_last_claim = safe_datetime_diff(current_date, stake["last_reward_claim"])
+        days_since_last_claim = time_since_last_claim.days
+
+        if days_since_last_claim <= 0:
+            return False # Nenhuma atualização necessária
+
+        # 2. Calcular recompensa diária
+        daily_rate = float(stake["apy"]) / 365 / 100
+        
+        if stake["auto_compound"]:
+            # Se for compound, o montante base para o cálculo é o original + recompensas acumuladas
+            base_amount = float(stake["amount"]) + float(stake["accrued_reward"])
+            
+            # Recálculo do montante total após 'days_since_last_claim' dias
+            new_total_amount = base_amount * ((1 + daily_rate) ** days_since_last_claim)
+            new_reward = new_total_amount - base_amount
+        else:
+            # Se não for compound, o montante base é apenas o original
+            base_amount = float(stake["amount"])
+            new_reward = base_amount * daily_rate * days_since_last_claim
+
+        new_accrued_reward = float(stake["accrued_reward"]) + new_reward
+        
+        # 3. Atualizar dias restantes
+        days_remaining = safe_days_remaining(stake["end_date"], current_date)
+
+        # 4. Atualizar banco de dados
+        cursor.execute(
+            """UPDATE stakes 
+            SET accrued_reward = %s, last_reward_claim = %s, days_remaining = %s, updated_at = %s
+            WHERE id = %s""",
+            (new_accrued_reward, current_date, days_remaining, current_date, stake_id)
+        )
+        
+        conn.commit()
+        return True
+
+    except Exception as e:
+        conn.rollback()
+        print(f"[UPDATE REWARDS] Erro ao atualizar recompensas para {stake_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
 @staking_bp.route("/claim-rewards", methods=["POST"])
 def claim_rewards():
-    """Coletar recompensas de staking"""
+    """Coletar recompensas acumuladas"""
     user_id = get_user_id_from_token()
     if not user_id:
         return jsonify({"error": "Usuário não autenticado"}), 401
     
     data = request.get_json()
     stake_id = data.get("stake_id")
-    
-    print(f"[CLAIM_REWARDS] Requisição - User: {user_id}, Stake: {stake_id}")
 
+    if not stake_id:
+        return jsonify({"error": "ID do stake é obrigatório"}), 400
+
+    # Garante que as recompensas estejam atualizadas antes de coletar
+    update_stake_rewards(stake_id)
+    
     conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
         stake = cursor.fetchone()
@@ -237,50 +390,50 @@ def claim_rewards():
             return jsonify({"error": "Stake não encontrado"}), 404
         
         if stake["status"] != "active":
-            return jsonify({"error": "Stake não está ativo"}), 400
-        
-        accrued_reward = float(stake["accrued_reward"])
-        if accrued_reward <= 0:
-            return jsonify({"message": "Nenhuma recompensa para coletar"}), 200
+            return jsonify({"error": "Apenas stakes ativos podem coletar recompensas"}), 400
+
+        reward_amount = float(stake["accrued_reward"])
+        if reward_amount <= 0:
+            return jsonify({"message": "Nenhuma recompensa acumulada para coletar."}), 200
 
         cursor.execute("BEGIN")
 
-        # 1. Registrar no ledger (entrada das recompensas)
+        # 1. Registrar no ledger (recompensa)
         cursor.execute(
             "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
-            (user_id, "ALZ", accrued_reward, "staking_reward", stake_id, 
-             f"Recompensa de staking coletada: {accrued_reward} ALZ")
+            (user_id, stake["asset"], reward_amount, "staking_reward", stake_id, 
+             f"Coleta de recompensa de {reward_amount:.6f} {stake['asset']} do staking {stake_id}")
         )
 
-        # 2. Atualizar saldo disponível
+        # 2. Atualizar saldos (adicionar à conta disponível)
         cursor.execute(
-            "UPDATE balances SET available = available + %s WHERE user_id = %s AND asset = 'ALZ'",
-            (accrued_reward, user_id)
+            "UPDATE balances SET available = available + %s WHERE user_id = %s AND asset = %s",
+            (reward_amount, user_id, stake["asset"])
         )
 
-        # 3. Zerar recompensas acumuladas no stake
+        # 3. Zerar recompensa acumulada no stake
         cursor.execute(
-            "UPDATE stakes SET accrued_reward = 0, last_reward_claim = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s",
-            (datetime.now(), stake_id)
+            "UPDATE stakes SET accrued_reward = 0.0, last_reward_claim = %s, updated_at = %s WHERE id = %s",
+            (datetime.now(timezone.utc), datetime.now(timezone.utc), stake_id)
         )
 
         conn.commit()
 
         return jsonify({
-            "message": "Recompensas coletadas com sucesso!",
-            "claimed_amount": accrued_reward
+            "message": f"Recompensa de {reward_amount:.6f} {stake['asset']} coletada com sucesso.",
+            "amount_claimed": reward_amount
         }), 200
 
     except Exception as e:
         conn.rollback()
-        print(f"[CLAIM_REWARDS] Erro: {e}")
+        print(f"[CLAIM REWARDS] Erro: {e}")
         return jsonify({"error": f"Erro ao coletar recompensas: {e}"}), 500
     finally:
         conn.close()
 
 @staking_bp.route("/me", methods=["GET"])
 def get_my_stakes():
-    """Buscar stakes do usuário"""
+    """Buscar todos os stakes ativos do usuário"""
     user_id = get_user_id_from_token()
     if not user_id:
         return jsonify({"error": "Usuário não autenticado"}), 401
@@ -289,53 +442,28 @@ def get_my_stakes():
     cursor = conn.cursor()
     
     try:
-        cursor.execute("SELECT * FROM stakes WHERE user_id = %s AND status = 'active'", (user_id,))
+        # Atualizar recompensas de todos os stakes ativos antes de retornar
+        cursor.execute("SELECT id FROM stakes WHERE user_id = %s AND status = 'active'", (user_id,))
+        active_stakes = cursor.fetchall()
+        
+        for stake in active_stakes:
+            update_stake_rewards(stake["id"])
+
+        # Buscar stakes atualizados
+        cursor.execute("SELECT * FROM stakes WHERE user_id = %s", (user_id,))
         stakes = cursor.fetchall()
         
-        # Atualizar recompensas acumuladas
-        updated_stakes = []
-        for stake in stakes:
-            stake_dict = dict(stake)
-            
-            # Calcular dias restantes
-            end_date = stake["end_date"]
-            now = datetime.now()
-            days_remaining = max(0, (end_date - now).days)
-            
-            # Calcular recompensas acumuladas desde o último claim
-            last_claim = stake["last_reward_claim"]
-            days_since_last_claim = (now - last_claim).days
-            
-            if days_since_last_claim > 0:
-                daily_reward = calculate_rewards(stake["amount"], 1, stake["apy"], stake["auto_compound"])
-                new_accrued = float(stake["accrued_reward"]) + (daily_reward * days_since_last_claim)
-                
-                # Atualizar no banco se houver novas recompensas
-                if new_accrued > float(stake["accrued_reward"]):
-                    cursor.execute(
-                        "UPDATE stakes SET accrued_reward = %s, last_reward_claim = %s, days_remaining = %s WHERE id = %s",
-                        (new_accrued, now, days_remaining, stake["id"])
-                    )
-                    stake_dict["accrued_reward"] = new_accrued
-                else:
-                    stake_dict["accrued_reward"] = float(stake["accrued_reward"])
-            else:
-                stake_dict["accrued_reward"] = float(stake["accrued_reward"])
-            
-            stake_dict["days_remaining"] = days_remaining
-            updated_stakes.append(stake_dict)
-        
-        conn.commit()
-        
-        # Converter para formato do frontend
+        # Formatar a saída
         formatted_stakes = []
-        for stake in updated_stakes:
-            formatted_stake = {
+        for stake in stakes:
+            formatted_stakes.append({
                 "id": stake["id"],
                 "userId": stake["user_id"],
+                "asset": stake["asset"],
                 "amount": float(stake["amount"]),
                 "duration": stake["duration"],
                 "apy": float(stake["apy"]),
+                "baseApy": stake["metadata"].get("base_apy", float(stake["apy"])),
                 "startDate": stake["start_date"].isoformat(),
                 "endDate": stake["end_date"].isoformat(),
                 "estimatedReward": float(stake["estimated_reward"]),
@@ -343,14 +471,15 @@ def get_my_stakes():
                 "status": stake["status"],
                 "autoCompound": stake["auto_compound"],
                 "lastRewardClaim": stake["last_reward_claim"].isoformat(),
-                "daysRemaining": stake["days_remaining"]
-            }
-            formatted_stakes.append(formatted_stake)
-        
+                "daysRemaining": stake["days_remaining"],
+                "earlyWithdrawalPenalty": float(stake["early_withdrawal_penalty"]),
+                "tokenName": supported_tokens.get(stake["asset"], {}).get("name", stake["asset"])
+            })
+
         return jsonify({"stakes": formatted_stakes}), 200
         
     except Exception as e:
-        print(f"[GET_STAKES] Erro: {e}")
+        print(f"[GET MY STAKES] Erro: {e}")
         return jsonify({"error": f"Erro ao buscar stakes: {e}"}), 500
     finally:
         conn.close()
@@ -358,11 +487,20 @@ def get_my_stakes():
 @staking_bp.route("/options", methods=["GET"])
 def get_staking_options():
     """Buscar opções de staking disponíveis"""
-    return jsonify({"options": staking_options}), 200
+    return jsonify({
+        "options": staking_options,
+        "tokens": supported_tokens,
+        "features": {
+            "auto_compound": True,
+            "multiple_tokens": True,
+            "early_withdrawal": True,
+            "competitive_apy": True
+        }
+    }), 200
 
-@staking_bp.route("/history", methods=["GET"])
-def get_staking_history():
-    """Buscar histórico de staking do usuário"""
+@staking_bp.route("/stats", methods=["GET"])
+def get_staking_stats():
+    """Estatísticas de staking do usuário"""
     user_id = get_user_id_from_token()
     if not user_id:
         return jsonify({"error": "Usuário não autenticado"}), 401
@@ -371,17 +509,92 @@ def get_staking_history():
     cursor = conn.cursor()
     
     try:
-        cursor.execute(
-            """SELECT * FROM ledger_entries 
-            WHERE user_id = %s AND entry_type IN ('stake_lock', 'unstake', 'staking_reward') 
-            ORDER BY created_at DESC""",
-            (user_id,)
-        )
-        history = cursor.fetchall()
+        # Atualizar recompensas de todos os stakes ativos primeiro
+        cursor.execute("SELECT id FROM stakes WHERE user_id = %s AND status = 'active'", (user_id,))
+        active_stakes = cursor.fetchall()
         
-        return jsonify({"history": [dict(row) for row in history]}), 200
+        for stake in active_stakes:
+            update_stake_rewards(stake["id"])
+        
+        # Total em staking por token
+        cursor.execute('''
+            SELECT asset, SUM(amount) as total_staked, SUM(accrued_reward) as total_rewards
+            FROM stakes 
+            WHERE user_id = %s AND status = 'active'
+            GROUP BY asset
+        ''', (user_id,))
+        asset_stats = cursor.fetchall()
+        
+        # Estatísticas gerais
+        cursor.execute('''
+            SELECT 
+                COUNT(*) as total_stakes,
+                SUM(amount) as total_amount,
+                SUM(accrued_reward) as total_accrued_rewards,
+                AVG(apy) as average_apy
+            FROM stakes 
+            WHERE user_id = %s AND status = 'active'
+        ''', (user_id,))
+        general_stats = cursor.fetchone()
+        
+        stats = {
+            "asset_breakdown": [
+                {
+                    "asset": stat["asset"],
+                    "total_staked": float(stat["total_staked"]),
+                    "total_rewards": float(stat["total_rewards"]),
+                    "token_name": supported_tokens.get(stat["asset"], {}).get("name", stat["asset"])
+                }
+                for stat in asset_stats
+            ],
+            "general": {
+                "total_stakes": general_stats["total_stakes"] or 0,
+                "total_amount": float(general_stats["total_amount"] or 0),
+                "total_accrued_rewards": float(general_stats["total_accrued_rewards"] or 0),
+                "average_apy": float(general_stats["average_apy"] or 0)
+            },
+            "reward_history": []  # Simplificado por enquanto
+        }
+        
+        return jsonify({"stats": stats}), 200
         
     except Exception as e:
-        return jsonify({"error": f"Erro ao obter histórico: {e}"}), 500
+        print(f"[STATS] Erro: {e}")
+        return jsonify({"error": f"Erro ao buscar estatísticas: {e}"}), 500
+    finally:
+        conn.close()
+
+@staking_bp.route("/auto-compound/<stake_id>", methods=["PUT"])
+def toggle_auto_compound(stake_id):
+    """Ativar/desativar compound automático"""
+    user_id = get_user_id_from_token()
+    if not user_id:
+        return jsonify({"error": "Usuário não autenticado"}), 401
+    
+    data = request.get_json()
+    auto_compound = data.get("auto_compound", False)
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(
+            "UPDATE stakes SET auto_compound = %s, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND user_id = %s",
+            (auto_compound, stake_id, user_id)
+        )
+        
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Stake não encontrado"}), 404
+            
+        conn.commit()
+        
+        return jsonify({
+            "message": f"Compound automático {'ativado' if auto_compound else 'desativado'} com sucesso",
+            "auto_compound": auto_compound
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": f"Erro ao atualizar compound automático: {e}"}), 500
     finally:
         conn.close()
