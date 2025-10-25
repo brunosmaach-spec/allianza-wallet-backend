@@ -796,10 +796,10 @@ def test_nowpayments_webhook():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
+# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG CORRIGIDO)
 @app.route('/api/site/admin/payments', methods=['GET'])
 def site_admin_payments():
-    """Listar pagamentos para o admin do site - PRODUÇÃO"""
+    """Listar pagamentos para o admin do site - PRODUÇÃO CORRIGIDA"""
     try:
         auth_header = request.headers.get('Authorization', '')
         
@@ -853,15 +853,21 @@ def site_admin_payments():
             payment_dict = dict(payment)
             # Converte valores numéricos (Decimal) para float para JSON
             payment_dict['amount'] = float(payment_dict['amount'])
-            # ✅ CORREÇÃO: Calcular valor em ALZ a partir do metadata ou do amount
+            
+            # ✅✅✅ CORREÇÃO CRÍTICA: NÃO DIVIDIR POR 0.10 NOVAMENTE!
+            # O valor já está correto no metadata ou no amount
             if payment_dict['metadata'] and payment_dict['metadata'].get('alz_amount'):
                 payment_dict['alz_amount'] = float(payment_dict['metadata']['alz_amount'])
+                print(f"💰 Usando metadata: R$ {payment_dict['amount']} → {payment_dict['alz_amount']} ALZ")
             else:
-                # ✅ CORREÇÃO: Fallback: calcular a partir do amount em BRL (amount / 0.10)
-                payment_dict['alz_amount'] = float(payment_dict['amount']) / 0.10
+                # ✅ CORREÇÃO: Usar o amount diretamente (já está em ALZ após processamento)
+                payment_dict['alz_amount'] = float(payment_dict['amount'])
+                print(f"💰 Usando amount direto: {payment_dict['alz_amount']} ALZ")
+                
             # O metadata já é um JSONB, mas garantimos que seja um dict
             if payment_dict['metadata'] is None:
                 payment_dict['metadata'] = {}
+                
             data_list.append(payment_dict)
 
         return jsonify({
@@ -979,7 +985,8 @@ def site_admin_process_payments():
                 if payment and payment['user_id']:
                     
                     # ✅✅✅ CORREÇÃO CRÍTICA: Calcular ALZ CORRETAMENTE
-                    alz_amount_to_credit = float(payment['amount']) / 0.10  # R$ 10,00 / 0.10 = 100 ALZ
+                    # O amount no banco está em BRL, então converter para ALZ
+                    alz_amount_to_credit = float(payment['amount']) / 0.10  # R$ 20,00 / 0.10 = 200 ALZ
                     
                     # Se tiver metadata, usar o valor do metadata (que já deve estar correto)
                     if payment['metadata'] and payment['metadata'].get('alz_amount'):
@@ -1255,7 +1262,7 @@ def login_user():
     password = data.get("password")
 
     if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
+    return jsonify({"error": "Email and password are required"}), 400
 
     conn = get_db_connection()
     cursor = conn.cursor()
