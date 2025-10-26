@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (CORRIGIDO MÉTODO PIX)
+# backend_wallet_integration.py - PRODUÇÃO (CORRIGIDO MÉTODO PIX E VALOR USUÁRIO)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,8 +19,8 @@ load_dotenv()
 
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
-print("✅ PAGAR.ME PIX INTEGRADO - MÉTODO CORRIGIDO")
-print("🎯 R$ 10,00 = 100 ALZ")
+print("✅ PAGAR.ME PIX INTEGRADO - VALOR DO USUÁRIO")
+print("🎯 USUÁRIO DIGITA O VALOR NO PAGAR.ME")
 print("=" * 60)
 
 # ✅ CONFIGURAÇÃO NOWPAYMENTS COM FALLBACK
@@ -493,47 +493,56 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
-# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA SEM CORS DUPLICADO E MÉTODO CORRETO
+# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA SEM VALOR FIXO
 @app.route('/create-pagarme-pix', methods=['POST'])
 def create_pagarme_pix():
-    """Criar pagamento PIX via Pagar.me - CORREÇÃO DO MÉTODO"""
+    """Criar pagamento PIX via Pagar.me - USUÁRIO DIGITA O VALOR"""
     
     try:
         data = request.json
-        amount_brl = data.get('amount')  # Valor em BRL
+        amount_brl = data.get('amount')  # Valor em BRL (apenas para referência/registro)
         email = data.get('email')
         
-        if not amount_brl or not email:
-            return jsonify({"error": "Valor e email são obrigatórios"}), 400
+        if not email:
+            return jsonify({"error": "Email é obrigatório"}), 400
             
-        # Converter para centavos
-        amount_in_cents = int(float(amount_brl) * 100)
+        # ✅ CORREÇÃO: NÃO enviar amount na URL do Pagar.me
+        # O usuário digitará o valor diretamente no checkout do Pagar.me
+        pagarme_url = f"{PAGARME_PIX_URL}?checkout[customer][email]={email}"
         
-        # ✅ URL do Pagar.me com parâmetros
-        pagarme_url = f"{PAGARME_PIX_URL}?amount={amount_in_cents}&checkout[customer][email]={email}"
-        
-        print(f"🧾 Criando PIX Pagar.me: R$ {amount_brl} → {amount_in_cents} centavos para {email}")
+        print(f"🧾 Criando PIX Pagar.me para: {email}")
         print(f"🔗 URL: {pagarme_url}")
+        print(f"💡 Valor será definido pelo usuário no checkout Pagar.me")
         
-        # ✅ CORREÇÃO CRÍTICA: Registrar o pagamento com método CORRETO 'pix'
+        # ✅ CORREÇÃO: Registrar o pagamento SEM amount fixo
         conn = get_db_connection()
         cursor = conn.cursor()
         
         try:
             cursor.execute("BEGIN")
             
-            # Calcular ALZ
-            amount_alz = float(amount_brl) / 0.10
+            # Se tiver amount, usar para cálculo interno, mas não enviar ao Pagar.me
+            amount_alz = 0
+            if amount_brl:
+                amount_alz = float(amount_brl) / 0.10
+                print(f"💰 Valor de referência: R$ {amount_brl} = {amount_alz} ALZ")
+            else:
+                print("💰 Valor será definido pelo usuário no Pagar.me")
             
-            # ✅✅✅ CORREÇÃO: Registrar com método CORRETO 'pix' em vez de 'pagarme_pix'
+            # ✅ Registrar com método CORRETO 'pix' e amount 0 (será atualizado depois)
             cursor.execute(
                 "INSERT INTO payments (email, amount, method, status, metadata) VALUES (%s, %s, %s, 'pending', %s) RETURNING id",
-                (email, float(amount_brl), 'pix', json.dumps({'alz_amount': amount_alz}))  # ✅ MÉTODO CORRETO: 'pix'
+                (email, float(amount_brl) if amount_brl else 0, 'pix', json.dumps({
+                    'alz_amount': amount_alz,
+                    'user_defined_amount': True,  # ✅ Flag indicando que o valor será definido pelo usuário
+                    'pagarme_checkout': True,
+                    'note': 'Usuário definirá o valor no Pagar.me'
+                }))
             )
             payment_id = cursor.fetchone()['id']
             
             conn.commit()
-            print(f"✅ Pagamento PIX registrado: ID {payment_id} - R$ {amount_brl} = {amount_alz} ALZ | Método: pix")
+            print(f"✅ Pagamento PIX registrado: ID {payment_id} | Email: {email} | Método: pix")
             
         except Exception as e:
             conn.rollback()
@@ -542,15 +551,14 @@ def create_pagarme_pix():
         finally:
             conn.close()
         
-        # ✅✅✅ CORREÇÃO: SEM HEADERS MANUAIS - O Flask-CORS já cuida disso
         return jsonify({
             "success": True,
             "url": pagarme_url,
-            "amount_brl": amount_brl,
-            "amount_cents": amount_in_cents,
             "email": email,
-            "method": "pix",  # ✅ Retornar método correto
-            "payment_id": payment_id
+            "method": "pix",
+            "payment_id": payment_id,
+            "user_defined_amount": True,  # ✅ Informar ao frontend que o valor será definido pelo usuário
+            "note": "O valor será definido pelo usuário no checkout do Pagar.me"
         }), 200
         
     except Exception as e:
