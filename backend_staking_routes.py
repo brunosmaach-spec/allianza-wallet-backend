@@ -498,6 +498,27 @@ def get_my_stakes():
                 # ✅ USAR FUNÇÃO CORRIGIDA para calcular dias restantes
                 days_remaining = safe_days_remaining(stake["end_date"])
                 
+                # ✅ GARANTIR que as datas sejam strings ISO formatadas corretamente
+                start_date = stake["start_date"]
+                end_date = stake["end_date"]
+                last_reward_claim = stake["last_reward_claim"]
+                
+                # Se as datas são timezone-aware, converter para string ISO
+                if hasattr(start_date, 'isoformat'):
+                    start_date_iso = start_date.isoformat()
+                else:
+                    start_date_iso = start_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                    
+                if hasattr(end_date, 'isoformat'):
+                    end_date_iso = end_date.isoformat()
+                else:
+                    end_date_iso = end_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                    
+                if hasattr(last_reward_claim, 'isoformat'):
+                    last_reward_claim_iso = last_reward_claim.isoformat()
+                else:
+                    last_reward_claim_iso = last_reward_claim.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+                
                 formatted_stakes.append({
                     "id": stake["id"],
                     "userId": stake["user_id"],
@@ -506,13 +527,13 @@ def get_my_stakes():
                     "duration": stake["duration"],
                     "apy": float(stake["apy"]),
                     "baseApy": stake["metadata"].get("base_apy", float(stake["apy"])),
-                    "startDate": stake["start_date"].isoformat(),
-                    "endDate": stake["end_date"].isoformat(),
+                    "startDate": start_date_iso,
+                    "endDate": end_date_iso,
                     "estimatedReward": float(stake["estimated_reward"]),
                     "accruedReward": float(stake["accrued_reward"]),
                     "status": stake["status"],
                     "autoCompound": stake["auto_compound"],
-                    "lastRewardClaim": stake["last_reward_claim"].isoformat(),
+                    "lastRewardClaim": last_reward_claim_iso,
                     "daysRemaining": days_remaining,  # ✅ USAR VALOR CALCULADO CORRETAMENTE
                     "earlyWithdrawalPenalty": float(stake["early_withdrawal_penalty"]),
                     "tokenName": supported_tokens.get(stake["asset"], {}).get("name", stake["asset"])
