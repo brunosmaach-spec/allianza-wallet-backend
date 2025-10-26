@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO COM PAGAR.ME PIX)
+# backend_wallet_integration.py - PRODUÇÃO (CORRIGIDO MÉTODO PIX)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,7 +19,7 @@ load_dotenv()
 
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
-print("✅ PAGAR.ME PIX INTEGRADO")
+print("✅ PAGAR.ME PIX INTEGRADO - MÉTODO CORRIGIDO")
 print("🎯 R$ 10,00 = 100 ALZ")
 print("=" * 60)
 
@@ -374,7 +374,7 @@ def site_purchase():
         )
         payment_id = cursor.fetchone()['id']
         
-        print(f"✅ Compra registrada: ID {payment_id} | R$ {brl_amount_for_db} = {amount_alz} ALZ")
+        print(f"✅ Compra registrada: ID {payment_id} | R$ {brl_amount_for_db} = {amount_alz} ALZ | Método: {method}")
         
         # Buscar usuário existente
         cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
@@ -493,7 +493,7 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
-# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA SEM CORS DUPLICADO
+# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA SEM CORS DUPLICADO E MÉTODO CORRETO
 @app.route('/create-pagarme-pix', methods=['POST'])
 def create_pagarme_pix():
     """Criar pagamento PIX via Pagar.me - CORREÇÃO DO MÉTODO"""
@@ -515,7 +515,7 @@ def create_pagarme_pix():
         print(f"🧾 Criando PIX Pagar.me: R$ {amount_brl} → {amount_in_cents} centavos para {email}")
         print(f"🔗 URL: {pagarme_url}")
         
-        # ✅ CORREÇÃO: Registrar o pagamento com método CORRETO
+        # ✅ CORREÇÃO CRÍTICA: Registrar o pagamento com método CORRETO 'pix'
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -525,19 +525,19 @@ def create_pagarme_pix():
             # Calcular ALZ
             amount_alz = float(amount_brl) / 0.10
             
-            # Registrar com método CORRETO: 'pagarme_pix'
+            # ✅✅✅ CORREÇÃO: Registrar com método CORRETO 'pix' em vez de 'pagarme_pix'
             cursor.execute(
                 "INSERT INTO payments (email, amount, method, status, metadata) VALUES (%s, %s, %s, 'pending', %s) RETURNING id",
-                (email, float(amount_brl), 'pagarme_pix', json.dumps({'alz_amount': amount_alz}))
+                (email, float(amount_brl), 'pix', json.dumps({'alz_amount': amount_alz}))  # ✅ MÉTODO CORRETO: 'pix'
             )
             payment_id = cursor.fetchone()['id']
             
             conn.commit()
-            print(f"✅ Pagamento Pagar.me registrado: ID {payment_id} - R$ {amount_brl} = {amount_alz} ALZ")
+            print(f"✅ Pagamento PIX registrado: ID {payment_id} - R$ {amount_brl} = {amount_alz} ALZ | Método: pix")
             
         except Exception as e:
             conn.rollback()
-            print(f"❌ Erro ao registrar pagamento Pagar.me: {e}")
+            print(f"❌ Erro ao registrar pagamento PIX: {e}")
             return jsonify({"error": "Erro ao registrar pagamento"}), 500
         finally:
             conn.close()
@@ -549,7 +549,7 @@ def create_pagarme_pix():
             "amount_brl": amount_brl,
             "amount_cents": amount_in_cents,
             "email": email,
-            "method": "pagarme_pix",
+            "method": "pix",  # ✅ Retornar método correto
             "payment_id": payment_id
         }), 200
         
@@ -934,11 +934,11 @@ def site_admin_payments():
             # O valor já está correto no metadata ou no amount
             if payment_dict['metadata'] and payment_dict['metadata'].get('alz_amount'):
                 payment_dict['alz_amount'] = float(payment_dict['metadata']['alz_amount'])
-                print(f"💰 Usando metadata: R$ {payment_dict['amount']} → {payment_dict['alz_amount']} ALZ")
+                print(f"💰 Usando metadata: R$ {payment_dict['amount']} → {payment_dict['alz_amount']} ALZ | Método: {payment_dict['method']}")
             else:
                 # ✅ CORREÇÃO: Usar o amount diretamente (já está em ALZ após processamento)
                 payment_dict['alz_amount'] = float(payment_dict['amount'])
-                print(f"💰 Usando amount direto: {payment_dict['alz_amount']} ALZ")
+                print(f"💰 Usando amount direto: {payment_dict['alz_amount']} ALZ | Método: {payment_dict['method']}")
                 
             # O metadata já é um JSONB, mas garantimos que seja um dict
             if payment_dict['metadata'] is None:
@@ -1068,7 +1068,7 @@ def site_admin_process_payments():
                     if payment['metadata'] and payment['metadata'].get('alz_amount'):
                         alz_amount_to_credit = float(payment['metadata']['alz_amount'])
                         
-                    print(f"💰 PROCESSANDO: R$ {payment['amount']} → {alz_amount_to_credit} ALZ para {payment['email']}")
+                    print(f"💰 PROCESSANDO: R$ {payment['amount']} → {alz_amount_to_credit} ALZ para {payment['email']} | Método: {payment['method']}")
                     
                     # Creditar o valor em ALZ
                     cursor.execute(
