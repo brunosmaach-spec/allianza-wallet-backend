@@ -35,7 +35,7 @@ class NeonDatabase:
             raise
 
     def init_db(self):
-        """Inicializar tabelas no Neon - COMPLETO COM TABELA STAKES"""
+        """Inicializar tabelas no Neon - CORRIGIDO"""
         conn = None
         
         try:
@@ -105,32 +105,53 @@ class NeonDatabase:
             ''')
             print("✅ Tabela 'withdrawal_requests' criada/verificada")
             
-            # ✅✅✅ TABELA DE STAKES - CORRIGIDA E COMPLETA
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS stakes (
-                    id VARCHAR(100) PRIMARY KEY,
-                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    asset VARCHAR(10) DEFAULT 'ALZ' NOT NULL,
-                    amount NUMERIC(20,8) NOT NULL,
-                    duration INTEGER NOT NULL,
-                    apy NUMERIC(5,2) NOT NULL,
-                    start_date TIMESTAMPTZ NOT NULL,
-                    end_date TIMESTAMPTZ NOT NULL,
-                    estimated_reward NUMERIC(20,8) NOT NULL,
-                    accrued_reward NUMERIC(20,8) DEFAULT 0.0 NOT NULL,
-                    status VARCHAR(20) DEFAULT 'active' NOT NULL,
-                    auto_compound BOOLEAN DEFAULT FALSE NOT NULL,
-                    last_reward_claim TIMESTAMPTZ NOT NULL,
-                    days_remaining INTEGER NOT NULL,
-                    early_withdrawal_penalty NUMERIC(5,4) DEFAULT 0.10 NOT NULL,
-                    actual_return NUMERIC(20,8),
-                    penalty_applied NUMERIC(20,8),
-                    withdrawn_at TIMESTAMPTZ,
-                    metadata JSONB,
-                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
-                );
-            ''')
+            # ✅✅✅ TABELA DE STAKES - CORRIGIDA (COM VERIFICAÇÃO DE ESTRUTURA)
+            cursor.execute("SELECT to_regclass('public.stakes')")
+            stakes_exists = cursor.fetchone()[0] is not None
+            
+            if stakes_exists:
+                print("🔄 Tabela 'stakes' já existe, verificando estrutura...")
+                # Verificar se a coluna asset existe
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'stakes' AND column_name = 'asset'
+                """)
+                asset_column_exists = cursor.fetchone() is not None
+                
+                if not asset_column_exists:
+                    print("🔧 Adicionando coluna 'asset' à tabela stakes...")
+                    cursor.execute('ALTER TABLE stakes ADD COLUMN asset VARCHAR(10) DEFAULT \'ALZ\' NOT NULL;')
+                    print("✅ Coluna 'asset' adicionada à tabela stakes")
+            else:
+                # Criar tabela do zero
+                cursor.execute('''
+                    CREATE TABLE stakes (
+                        id VARCHAR(100) PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        asset VARCHAR(10) DEFAULT 'ALZ' NOT NULL,
+                        amount NUMERIC(20,8) NOT NULL,
+                        duration INTEGER NOT NULL,
+                        apy NUMERIC(5,2) NOT NULL,
+                        start_date TIMESTAMPTZ NOT NULL,
+                        end_date TIMESTAMPTZ NOT NULL,
+                        estimated_reward NUMERIC(20,8) NOT NULL,
+                        accrued_reward NUMERIC(20,8) DEFAULT 0.0 NOT NULL,
+                        status VARCHAR(20) DEFAULT 'active' NOT NULL,
+                        auto_compound BOOLEAN DEFAULT FALSE NOT NULL,
+                        last_reward_claim TIMESTAMPTZ NOT NULL,
+                        days_remaining INTEGER NOT NULL,
+                        early_withdrawal_penalty NUMERIC(5,4) DEFAULT 0.10 NOT NULL,
+                        actual_return NUMERIC(20,8),
+                        penalty_applied NUMERIC(20,8),
+                        withdrawn_at TIMESTAMPTZ,
+                        metadata JSONB,
+                        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                    );
+                ''')
+                print("✅ Tabela 'stakes' criada do zero")
+            
             print("✅ Tabela 'stakes' criada/verificada")
 
             # Tabela de pagamentos
@@ -164,12 +185,24 @@ class NeonDatabase:
             ''')
             print("✅ Tabela 'admin_logs' criada/verificada")
             
-            # Índices para performance
+            # ✅ CORREÇÃO: Índices apenas após garantir que as colunas existem
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ledger_user_id ON ledger_entries(user_id);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger_entries(created_at);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_user_id ON stakes(user_id);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_status ON stakes(status);')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_asset ON stakes(asset);')
+            
+            # ✅ CORREÇÃO: Verificar se a coluna asset existe antes de criar índice
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'stakes' AND column_name = 'asset'
+            """)
+            if cursor.fetchone():
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_asset ON stakes(asset);')
+                print("✅ Índice idx_stakes_asset criado/verificado")
+            else:
+                print("⚠️ Índice idx_stakes_asset ignorado (coluna asset não existe)")
+            
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_end_date ON stakes(end_date);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_email ON payments(email);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);')
