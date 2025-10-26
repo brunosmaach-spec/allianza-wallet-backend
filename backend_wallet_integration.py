@@ -156,13 +156,8 @@ CORS(app, resources={
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])
 @app.route('/api/nowpayments/check-config', methods=['OPTIONS'])
 @app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])
-
 def options_handler():
     return '', 200
-
-# ✅ ROTA OPTIONS ESPECÍFICA PARA PAGAR.ME PIX - REMOVIDA
-# A rota OPTIONS duplicada estava sobrescrevendo a configuração CORS global.
-# A configuração global (CORS(app, ...)) e o after_request já tratam o CORS corretamente.
 
 # 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO (CORRIGIDO)
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD_1', 'CdE25$$$')
@@ -195,38 +190,6 @@ init_db()
 
 # Registrar blueprint de staking
 app.register_blueprint(staking_bp, url_prefix="/staking")
-
-# ✅ MIDDLEWARE CORS GLOBAL
-@app.after_request
-def after_request(response):
-    """Adiciona headers CORS a todas as respostas"""
-    origin = request.headers.get('Origin', '')
-    
-    # Lista de origens permitidas
-    allowed_origins = [
-        "https://allianza.tech",
-        "https://admin.allianza.tech", 
-        "https://www.allianza.tech",
-        "https://wallet.allianza.tech",
-        "https://www.wallet.allianza.tech",
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173", 
-        "http://127.0.0.1:5174",
-        "http://localhost:5175",
-        "http://127.0.0.1:5175",
-        "http://localhost:5176",
-        "http://127.0.0.1:5176"
-    ]
-    
-    if origin in allowed_origins:
-        response.headers.add('Access-Control-Allow-Origin', origin)
-    
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-    response.headers.add('Access-Control-Allow-Credentials', 'true')
-    
-    return response
 
 # 🔒 Middleware de Autenticação Admin
 def admin_required(f):
@@ -530,19 +493,10 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
-# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA COM CORS
-@app.route('/create-pagarme-pix', methods=['POST', 'OPTIONS'])
+# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA SEM CORS DUPLICADO
+@app.route('/create-pagarme-pix', methods=['POST'])
 def create_pagarme_pix():
     """Criar pagamento PIX via Pagar.me - CORREÇÃO DO MÉTODO"""
-    
-    # ✅ CORREÇÃO CORS: Se for OPTIONS, retorna headers CORS
-    if request.method == 'OPTIONS':
-        return '', 200, {
-            'Access-Control-Allow-Origin': 'http://localhost:5173',
-            'Access-Control-Allow-Methods': 'POST, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-            'Access-Control-Max-Age': '3600'
-        }
     
     try:
         data = request.json
@@ -588,8 +542,8 @@ def create_pagarme_pix():
         finally:
             conn.close()
         
-        # ✅ CORREÇÃO: Adicionar headers CORS na resposta
-        response = jsonify({
+        # ✅✅✅ CORREÇÃO: SEM HEADERS MANUAIS - O Flask-CORS já cuida disso
+        return jsonify({
             "success": True,
             "url": pagarme_url,
             "amount_brl": amount_brl,
@@ -597,16 +551,11 @@ def create_pagarme_pix():
             "email": email,
             "method": "pagarme_pix",
             "payment_id": payment_id
-        })
-        
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5173')
-        return response, 200
+        }), 200
         
     except Exception as e:
         print(f"❌ Erro ao criar PIX Pagar.me: {e}")
-        response = jsonify({"error": str(e)})
-        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5173')
-        return response, 500
+        return jsonify({"error": str(e)}), 500
 
 # 🎣 WEBHOOK STRIPE (CORRIGIDO)
 @app.route('/webhook/stripe', methods=['POST'])
