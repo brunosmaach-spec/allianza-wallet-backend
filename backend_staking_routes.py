@@ -1,4 +1,4 @@
-# backend_staking_routes.py - CORREÇÃO DA FUNÇÃO safe_datetime_diff
+# backend_staking_routes.py - CORREÇÃO COMPLETA DA FUNÇÃO safe_datetime_diff
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, timezone
 import uuid
@@ -66,23 +66,58 @@ def calculate_actual_apy(base_apy, token, duration, auto_compound):
         return base_rate
 
 def safe_datetime_diff(dt1, dt2):
-    """Calcular diferença entre datetimes de forma segura - CORREÇÃO CRÍTICA"""
-    # Converter ambos para UTC se tiverem timezone, ou para naive se não tiverem
-    if dt1.tzinfo is not None:
-        dt1 = dt1.astimezone(timezone.utc).replace(tzinfo=None)
-    if dt2.tzinfo is not None:
-        dt2 = dt2.astimezone(timezone.utc).replace(tzinfo=None)
-    
-    return dt1 - dt2
+    """✅✅✅ CORREÇÃO CRÍTICA: Calcular diferença entre datetimes de forma segura"""
+    try:
+        # Se ambos são naive (sem timezone), converter para UTC timezone-aware
+        if dt1.tzinfo is None and dt2.tzinfo is None:
+            dt1 = dt1.replace(tzinfo=timezone.utc)
+            dt2 = dt2.replace(tzinfo=timezone.utc)
+        
+        # Se um tem timezone e o outro não, converter o naive para UTC
+        elif dt1.tzinfo is None and dt2.tzinfo is not None:
+            dt1 = dt1.replace(tzinfo=timezone.utc)
+        elif dt1.tzinfo is not None and dt2.tzinfo is None:
+            dt2 = dt2.replace(tzinfo=timezone.utc)
+        
+        # Agora ambos têm timezone, normalizar para UTC
+        dt1_utc = dt1.astimezone(timezone.utc)
+        dt2_utc = dt2.astimezone(timezone.utc)
+        
+        # Retornar a diferença
+        return dt1_utc - dt2_utc
+        
+    except Exception as e:
+        print(f"❌ Erro em safe_datetime_diff: {e}")
+        # Fallback: converter ambos para naive
+        if hasattr(dt1, 'replace'):
+            dt1 = dt1.replace(tzinfo=None)
+        if hasattr(dt2, 'replace'):
+            dt2 = dt2.replace(tzinfo=None)
+        return dt1 - dt2
 
 def safe_days_remaining(end_date, current_date=None):
-    """Calcular dias restantes de forma segura"""
+    """✅ CORREÇÃO: Calcular dias restantes de forma segura"""
     if current_date is None:
         current_date = datetime.now(timezone.utc)
     
-    # Usar a função safe_datetime_diff corrigida
-    time_diff = safe_datetime_diff(end_date, current_date)
-    return max(0, time_diff.days)
+    try:
+        # Usar a função safe_datetime_diff corrigida
+        time_diff = safe_datetime_diff(end_date, current_date)
+        days = time_diff.days
+        
+        # Se a diferença for negativa, significa que já passou da data
+        if days < 0:
+            return 0
+        
+        # Se for menos de 1 dia mas ainda não passou, considerar 1 dia
+        if time_diff.total_seconds() > 0:
+            return max(1, days)
+        else:
+            return 0
+            
+    except Exception as e:
+        print(f"❌ Erro em safe_days_remaining: {e}")
+        return 0
 
 @staking_bp.route("/stake", methods=["POST"])
 def stake():
@@ -231,7 +266,7 @@ def unstake():
         if stake["status"] != "active":
             return jsonify({"error": "Stake não está ativo"}), 400
 
-        # Usar função segura para calcular dias restantes
+        # ✅ USAR FUNÇÃO CORRIGIDA
         days_remaining = safe_days_remaining(stake["end_date"])
         
         is_early_withdrawal = days_remaining > 0
@@ -304,7 +339,7 @@ def unstake():
         conn.close()
 
 def update_stake_rewards(stake_id):
-    """Função interna para calcular e atualizar recompensas de um stake"""
+    """✅ CORREÇÃO: Função interna para calcular e atualizar recompensas de um stake"""
     conn = get_db_connection()
     cursor = conn.cursor()
     
@@ -317,8 +352,7 @@ def update_stake_rewards(stake_id):
 
         current_date = datetime.now(timezone.utc)
         
-        # 1. Calcular dias desde a última atualização/início
-        # Usar a função safe_datetime_diff corrigida
+        # ✅ USAR FUNÇÃO CORRIGIDA
         time_since_last_claim = safe_datetime_diff(current_date, stake["last_reward_claim"])
         days_since_last_claim = time_since_last_claim.days
 
@@ -342,7 +376,7 @@ def update_stake_rewards(stake_id):
 
         new_accrued_reward = float(stake["accrued_reward"]) + new_reward
         
-        # 3. Atualizar dias restantes
+        # ✅ USAR FUNÇÃO CORRIGIDA
         days_remaining = safe_days_remaining(stake["end_date"], current_date)
 
         # 4. Atualizar banco de dados
@@ -433,7 +467,7 @@ def claim_rewards():
 
 @staking_bp.route("/me", methods=["GET"])
 def get_my_stakes():
-    """Buscar todos os stakes ativos do usuário"""
+    """✅ CORREÇÃO: Buscar todos os stakes ativos do usuário"""
     user_id = get_user_id_from_token()
     if not user_id:
         return jsonify({"error": "Usuário não autenticado"}), 401
@@ -447,7 +481,11 @@ def get_my_stakes():
         active_stakes = cursor.fetchall()
         
         for stake in active_stakes:
-            update_stake_rewards(stake["id"])
+            try:
+                update_stake_rewards(stake["id"])
+            except Exception as e:
+                print(f"⚠️ Erro ao atualizar stake {stake['id']}: {e}")
+                continue
 
         # Buscar stakes atualizados
         cursor.execute("SELECT * FROM stakes WHERE user_id = %s", (user_id,))
@@ -456,25 +494,32 @@ def get_my_stakes():
         # Formatar a saída
         formatted_stakes = []
         for stake in stakes:
-            formatted_stakes.append({
-                "id": stake["id"],
-                "userId": stake["user_id"],
-                "asset": stake["asset"],
-                "amount": float(stake["amount"]),
-                "duration": stake["duration"],
-                "apy": float(stake["apy"]),
-                "baseApy": stake["metadata"].get("base_apy", float(stake["apy"])),
-                "startDate": stake["start_date"].isoformat(),
-                "endDate": stake["end_date"].isoformat(),
-                "estimatedReward": float(stake["estimated_reward"]),
-                "accruedReward": float(stake["accrued_reward"]),
-                "status": stake["status"],
-                "autoCompound": stake["auto_compound"],
-                "lastRewardClaim": stake["last_reward_claim"].isoformat(),
-                "daysRemaining": stake["days_remaining"],
-                "earlyWithdrawalPenalty": float(stake["early_withdrawal_penalty"]),
-                "tokenName": supported_tokens.get(stake["asset"], {}).get("name", stake["asset"])
-            })
+            try:
+                # ✅ USAR FUNÇÃO CORRIGIDA para calcular dias restantes
+                days_remaining = safe_days_remaining(stake["end_date"])
+                
+                formatted_stakes.append({
+                    "id": stake["id"],
+                    "userId": stake["user_id"],
+                    "asset": stake["asset"],
+                    "amount": float(stake["amount"]),
+                    "duration": stake["duration"],
+                    "apy": float(stake["apy"]),
+                    "baseApy": stake["metadata"].get("base_apy", float(stake["apy"])),
+                    "startDate": stake["start_date"].isoformat(),
+                    "endDate": stake["end_date"].isoformat(),
+                    "estimatedReward": float(stake["estimated_reward"]),
+                    "accruedReward": float(stake["accrued_reward"]),
+                    "status": stake["status"],
+                    "autoCompound": stake["auto_compound"],
+                    "lastRewardClaim": stake["last_reward_claim"].isoformat(),
+                    "daysRemaining": days_remaining,  # ✅ USAR VALOR CALCULADO CORRETAMENTE
+                    "earlyWithdrawalPenalty": float(stake["early_withdrawal_penalty"]),
+                    "tokenName": supported_tokens.get(stake["asset"], {}).get("name", stake["asset"])
+                })
+            except Exception as e:
+                print(f"⚠️ Erro ao formatar stake {stake['id']}: {e}")
+                continue
 
         return jsonify({"stakes": formatted_stakes}), 200
         
@@ -514,7 +559,11 @@ def get_staking_stats():
         active_stakes = cursor.fetchall()
         
         for stake in active_stakes:
-            update_stake_rewards(stake["id"])
+            try:
+                update_stake_rewards(stake["id"])
+            except Exception as e:
+                print(f"⚠️ Erro ao atualizar stake {stake['id']}: {e}")
+                continue
         
         # Total em staking por token
         cursor.execute('''
