@@ -1,3 +1,4 @@
+# database_neon.py - COMPLETO E CORRIGIDO
 import os
 import psycopg
 from psycopg.rows import dict_row
@@ -34,7 +35,7 @@ class NeonDatabase:
             raise
 
     def init_db(self):
-        """Inicializar tabelas no Neon"""
+        """Inicializar tabelas no Neon - COMPLETO COM TABELA STAKES"""
         conn = None
         
         try:
@@ -104,11 +105,12 @@ class NeonDatabase:
             ''')
             print("✅ Tabela 'withdrawal_requests' criada/verificada")
             
-            # Tabela de stakes
+            # ✅✅✅ TABELA DE STAKES - CORRIGIDA E COMPLETA
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS stakes (
                     id VARCHAR(100) PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    asset VARCHAR(10) DEFAULT 'ALZ' NOT NULL,
                     amount NUMERIC(20,8) NOT NULL,
                     duration INTEGER NOT NULL,
                     apy NUMERIC(5,2) NOT NULL,
@@ -120,6 +122,11 @@ class NeonDatabase:
                     auto_compound BOOLEAN DEFAULT FALSE NOT NULL,
                     last_reward_claim TIMESTAMPTZ NOT NULL,
                     days_remaining INTEGER NOT NULL,
+                    early_withdrawal_penalty NUMERIC(5,4) DEFAULT 0.10 NOT NULL,
+                    actual_return NUMERIC(20,8),
+                    penalty_applied NUMERIC(20,8),
+                    withdrawn_at TIMESTAMPTZ,
+                    metadata JSONB,
                     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
                 );
@@ -162,6 +169,8 @@ class NeonDatabase:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger_entries(created_at);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_user_id ON stakes(user_id);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_status ON stakes(status);')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_asset ON stakes(asset);')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_end_date ON stakes(end_date);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_email ON payments(email);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_payments_created_at ON payments(created_at);')
