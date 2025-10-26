@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO COM STAKING)
+# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO COM PAGAR.ME PIX)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,7 +19,7 @@ load_dotenv()
 
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
-print("✅ VALORES CORRIGIDOS - 1 ALZ = R$ 0.10")
+print("✅ PAGAR.ME PIX INTEGRADO")
 print("🎯 R$ 10,00 = 100 ALZ")
 print("=" * 60)
 
@@ -30,6 +30,7 @@ print(f"🔑 NOWPAYMENTS_IPN_SECRET: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENT
 print(f"📏 Comprimento: {len(NOWPAYMENTS_IPN_SECRET)} caracteres")
 print(f"🔗 Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments" )
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
+print(f"🧾 PAGARME_PIX_URL: ✅ CONFIGURADO")
 print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
 print("=" * 60)
 
@@ -117,7 +118,9 @@ CORS(app, resources={
             "http://127.0.0.1:5173",
             "http://127.0.0.1:5174",
             "http://localhost:5175",
-            "http://127.0.0.1:5175"
+            "http://127.0.0.1:5175",
+            "http://localhost:5176",
+            "http://127.0.0.1:5176"
         ],
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
         "allow_headers": [
@@ -127,9 +130,12 @@ CORS(app, resources={
             "Accept",
             "Origin",
             "Access-Control-Request-Method",
-            "Access-Control-Request-Headers"
+            "Access-Control-Request-Headers",
+            "Access-Control-Allow-Origin",
+            "Access-Control-Allow-Headers",
+            "Access-Control-Allow-Methods"
         ],
-        "expose_headers": ["Content-Range", "X-Content-Range"],
+        "expose_headers": ["Content-Range", "X-Content-Range", "Access-Control-Allow-Origin"],
         "supports_credentials": True,
         "max_age": 3600
     }
@@ -146,12 +152,17 @@ CORS(app, resources={
 @app.route('/health', methods=['OPTIONS'])
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
+@app.route('/create-pagarme-pix', methods=['OPTIONS'])
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])
 @app.route('/api/nowpayments/check-config', methods=['OPTIONS'])
 @app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])
 
 def options_handler():
     return '', 200
+
+# ✅ ROTA OPTIONS ESPECÍFICA PARA PAGAR.ME PIX - REMOVIDA
+# A rota OPTIONS duplicada estava sobrescrevendo a configuração CORS global.
+# A configuração global (CORS(app, ...)) e o after_request já tratam o CORS corretamente.
 
 # 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO (CORRIGIDO)
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD_1', 'CdE25$$$')
@@ -166,6 +177,9 @@ SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTER
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
 
+# ✅ PAGAR.ME CONFIGURAÇÃO
+PAGARME_PIX_URL = "https://payment-link-v3.pagar.me/pl_AdQDlEvzg9WJAb7hK3HgOyMN74PGjo1X"
+
 # ✅ DEBUG DAS VARIÁVEIS DE AMBIENTE (CORRIGIDO)
 print("🎯 VERIFICAÇÃO DAS VARIÁVEIS:")
 print(f"🔑 SITE_ADMIN_TOKEN: '{SITE_ADMIN_TOKEN}'")
@@ -173,6 +187,7 @@ print(f"📏 Comprimento: {len(SITE_ADMIN_TOKEN)}")
 print(f"🔐 ADMIN_JWT_SECRET: '{ADMIN_JWT_SECRET}'")
 print(f"👤 ADMIN_PASSWORD: '{ADMIN_PASSWORD}'")
 print(f"🔗 NOWPAYMENTS_IPN_SECRET: '{NOWPAYMENTS_IPN_SECRET}' ({len(NOWPAYMENTS_IPN_SECRET)} chars)")
+print(f"🧾 PAGARME_PIX_URL: '{PAGARME_PIX_URL}'")
 print("=" * 60)
 
 # Inicializa o banco de dados
@@ -180,6 +195,38 @@ init_db()
 
 # Registrar blueprint de staking
 app.register_blueprint(staking_bp, url_prefix="/staking")
+
+# ✅ MIDDLEWARE CORS GLOBAL
+@app.after_request
+def after_request(response):
+    """Adiciona headers CORS a todas as respostas"""
+    origin = request.headers.get('Origin', '')
+    
+    # Lista de origens permitidas
+    allowed_origins = [
+        "https://allianza.tech",
+        "https://admin.allianza.tech", 
+        "https://www.allianza.tech",
+        "https://wallet.allianza.tech",
+        "https://www.wallet.allianza.tech",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173", 
+        "http://127.0.0.1:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5175",
+        "http://localhost:5176",
+        "http://127.0.0.1:5176"
+    ]
+    
+    if origin in allowed_origins:
+        response.headers.add('Access-Control-Allow-Origin', origin)
+    
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+    response.headers.add('Access-Control-Allow-Credentials', 'true')
+    
+    return response
 
 # 🔒 Middleware de Autenticação Admin
 def admin_required(f):
@@ -483,6 +530,84 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
+# 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA COM CORS
+@app.route('/create-pagarme-pix', methods=['POST', 'OPTIONS'])
+def create_pagarme_pix():
+    """Criar pagamento PIX via Pagar.me - CORREÇÃO DO MÉTODO"""
+    
+    # ✅ CORREÇÃO CORS: Se for OPTIONS, retorna headers CORS
+    if request.method == 'OPTIONS':
+        return '', 200, {
+            'Access-Control-Allow-Origin': 'http://localhost:5173',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Max-Age': '3600'
+        }
+    
+    try:
+        data = request.json
+        amount_brl = data.get('amount')  # Valor em BRL
+        email = data.get('email')
+        
+        if not amount_brl or not email:
+            return jsonify({"error": "Valor e email são obrigatórios"}), 400
+            
+        # Converter para centavos
+        amount_in_cents = int(float(amount_brl) * 100)
+        
+        # ✅ URL do Pagar.me com parâmetros
+        pagarme_url = f"{PAGARME_PIX_URL}?amount={amount_in_cents}&checkout[customer][email]={email}"
+        
+        print(f"🧾 Criando PIX Pagar.me: R$ {amount_brl} → {amount_in_cents} centavos para {email}")
+        print(f"🔗 URL: {pagarme_url}")
+        
+        # ✅ CORREÇÃO: Registrar o pagamento com método CORRETO
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            
+            # Calcular ALZ
+            amount_alz = float(amount_brl) / 0.10
+            
+            # Registrar com método CORRETO: 'pagarme_pix'
+            cursor.execute(
+                "INSERT INTO payments (email, amount, method, status, metadata) VALUES (%s, %s, %s, 'pending', %s) RETURNING id",
+                (email, float(amount_brl), 'pagarme_pix', json.dumps({'alz_amount': amount_alz}))
+            )
+            payment_id = cursor.fetchone()['id']
+            
+            conn.commit()
+            print(f"✅ Pagamento Pagar.me registrado: ID {payment_id} - R$ {amount_brl} = {amount_alz} ALZ")
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro ao registrar pagamento Pagar.me: {e}")
+            return jsonify({"error": "Erro ao registrar pagamento"}), 500
+        finally:
+            conn.close()
+        
+        # ✅ CORREÇÃO: Adicionar headers CORS na resposta
+        response = jsonify({
+            "success": True,
+            "url": pagarme_url,
+            "amount_brl": amount_brl,
+            "amount_cents": amount_in_cents,
+            "email": email,
+            "method": "pagarme_pix",
+            "payment_id": payment_id
+        })
+        
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5173')
+        return response, 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao criar PIX Pagar.me: {e}")
+        response = jsonify({"error": str(e)})
+        response.headers.add('Access-Control-Allow-Origin', 'http://localhost:5173')
+        return response, 500
+
 # 🎣 WEBHOOK STRIPE (CORRIGIDO)
 @app.route('/webhook/stripe', methods=['POST'])
 def stripe_webhook():
@@ -614,7 +739,7 @@ def nowpayments_webhook():
                 "message": "NowPayments webhook está operacional",
                 "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
                 "method": "POST",
-                "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET ),
+                "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET),
                 "timestamp": datetime.now().isoformat()
             }), 200
         
@@ -1247,6 +1372,7 @@ def authenticate_request():
         "/check-user",
         "/api/site/purchase",
         "/create-checkout-session",
+        "/create-pagarme-pix",
         "/admin/login",
         "/debug/stripe",
         "/api/nowpayments/check-config",
@@ -1488,7 +1614,9 @@ def health_check():
         "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
         "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET),
         "nowpayments_webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
-        "nowpayments_status": "ACTIVE" if NOWPAYMENTS_IPN_SECRET else "INACTIVE"
+        "nowpayments_status": "ACTIVE" if NOWPAYMENTS_IPN_SECRET else "INACTIVE",
+        "pagarme_pix_available": True,
+        "pagarme_pix_url": PAGARME_PIX_URL
     } ), 200
 
 # ✅ Rota para informações do sistema - PRODUÇÃO (ATUALIZADA)
@@ -1502,10 +1630,12 @@ def system_info():
             "stripe": "/webhook/stripe",
             "nowpayments": "/webhook/nowpayments"
         },
-        "features": {
+        "payment_methods": {
             "stripe_available": STRIPE_AVAILABLE,
             "stripe_version": "8.0.0",
             "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
+            "pagarme_pix_available": True,
+            "pagarme_pix_url": PAGARME_PIX_URL,
             "neon_database": True,
             "nowpayments_webhook": True,
             "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET)
@@ -1613,6 +1743,7 @@ if __name__ == '__main__':
     print("   - POST /check-user")
     print("   - POST /api/site/purchase")
     print("   - POST /create-checkout-session")
+    print("   - POST /create-pagarme-pix")
     print("   - GET  /debug/stripe")
     print("🔗 NowPayments (PÚBLICAS):")
     print("   - GET  /api/nowpayments/check-config")
