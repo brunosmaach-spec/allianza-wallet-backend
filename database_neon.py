@@ -105,9 +105,16 @@ class NeonDatabase:
             ''')
             print("✅ Tabela 'withdrawal_requests' criada/verificada")
             
-            # ✅✅✅ TABELA DE STAKES - CORRIGIDA (COM VERIFICAÇÃO DE ESTRUTURA)
-            cursor.execute("SELECT to_regclass('public.stakes')")
-            stakes_exists = cursor.fetchone()[0] is not None
+            # ✅✅✅ CORREÇÃO: Verificar se a tabela stakes existe de forma correta
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'stakes'
+                );
+            """)
+            result = cursor.fetchone()
+            stakes_exists = result['exists'] if result else False
             
             if stakes_exists:
                 print("🔄 Tabela 'stakes' já existe, verificando estrutura...")
