@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (CORRIGIDO - VALORES ALINHADOS CORRETAMENTE)
+# backend_wallet_integration.py - PRODUÇÃO (ATUALIZADO COM STAKING)
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -141,6 +141,8 @@ CORS(app, resources={
 @app.route('/api/site/admin/process-payments', methods=['OPTIONS']) 
 @app.route('/api/site/admin/manual-token-send', methods=['OPTIONS'])
 @app.route('/api/site/admin/debug-token', methods=['OPTIONS'])
+@app.route('/api/site/admin/create-staking-table', methods=['OPTIONS'])
+@app.route('/api/site/admin/check-tables', methods=['OPTIONS'])
 @app.route('/health', methods=['OPTIONS'])
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
@@ -1143,6 +1145,82 @@ def site_admin_manual_token_send():
         print(f"❌ Erro geral envio manual: {e}")
         return jsonify({"error": str(e)}), 500
 
+# 🔧 ROTA PARA CRIAR TABELA STAKING MANUALMENTE
+@app.route('/api/site/admin/create-staking-table', methods=['POST'])
+def create_staking_table():
+    """Criar tabela de staking manualmente"""
+    try:
+        auth_header = request.headers.get('Authorization', '')
+        
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Token não fornecido"}), 401
+        
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        expected_token = SITE_ADMIN_TOKEN
+        
+        if not admin_token or admin_token != expected_token:
+            return jsonify({"error": "Token inválido"}), 401
+        
+        # Executar a criação da tabela
+        init_db()
+        
+        return jsonify({
+            "success": True,
+            "message": "Tabela de staking criada/verificada com sucesso!"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# 🔍 ROTA PARA VERIFICAR TABELAS
+@app.route('/api/site/admin/check-tables', methods=['GET'])
+def check_tables():
+    """Verificar se a tabela stakes existe"""
+    try:
+        auth_header = request.headers.get('Authorization', '')
+        
+        if not auth_header.startswith('Bearer '):
+            return jsonify({"error": "Token não fornecido"}), 401
+        
+        admin_token = auth_header.replace('Bearer ', '').strip()
+        expected_token = SITE_ADMIN_TOKEN
+        
+        if not admin_token or admin_token != expected_token:
+            return jsonify({"error": "Token inválido"}), 401
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public' 
+            AND table_name = 'stakes'
+        """)
+        
+        table_exists = cursor.fetchone() is not None
+        
+        # Verificar também a estrutura da tabela
+        if table_exists:
+            cursor.execute("""
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_name = 'stakes'
+            """)
+            columns = cursor.fetchall()
+            column_names = [col['column_name'] for col in columns]
+        
+        return jsonify({
+            "stakes_table_exists": table_exists,
+            "columns": column_names if table_exists else [],
+            "message": "Tabela de staking encontrada!" if table_exists else "Tabela de staking NÃO encontrada!"
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
 # ===== ROTAS EXISTENTES DA WALLET =====
 
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
@@ -1545,12 +1623,22 @@ if __name__ == '__main__':
     print("   - GET  /api/site/admin/stats")
     print("   - POST /api/site/admin/process-payments")
     print("   - POST /api/site/admin/manual-token-send")
+    print("   - POST /api/site/admin/create-staking-table")
+    print("   - GET  /api/site/admin/check-tables")
     print("📞 Webhooks:")
     print("   - POST /webhook/stripe")
     print("   - POST /webhook/nowpayments")
     print("💰 Rotas protegidas:")
     print("   - GET  /balances/me")
     print("   - GET  /ledger/history")
+    print("🎯 Staking Routes:")
+    print("   - POST /staking/stake")
+    print("   - POST /staking/unstake")
+    print("   - POST /staking/claim-rewards")
+    print("   - GET  /staking/me")
+    print("   - GET  /staking/options")
+    print("   - GET  /staking/stats")
+    print("   - PUT  /staking/auto-compound/<stake_id>")
     print("=" * 60)
     
     try:
