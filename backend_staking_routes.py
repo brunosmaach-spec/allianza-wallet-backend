@@ -183,14 +183,14 @@ def stake():
             (stake_id, user_id, token, amount, duration, actual_apy, start_date, end_date, 
              round(estimated_reward, 6), 0.0, "active", auto_compound, start_date, duration,
              staking_option["early_withdrawal_penalty"],
-             json.dumps({
-                 "token_name": supported_tokens[token]["name"],
-                 "base_apy": base_apy,
-                 "actual_apy": actual_apy,
-                 "auto_compound": auto_compound,
-                 "option_label": staking_option["label"]
-             })
-        )
+	             json.dumps({
+	                 "token_name": supported_tokens[token]["name"],
+	                 "base_apy": base_apy,
+	                 "actual_apy": actual_apy,
+	                 "auto_compound": auto_compound,
+	                 "option_label": staking_option["label"]
+	             })
+	        ))
 
         conn.commit()
 
