@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO (CORRIGIDO MÉTODO PIX E VALOR USUÁRIO)
+# backend_wallet_integration.py - PRODUÇÃO COM KEEP-ALIVE
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -12,16 +12,41 @@ import hmac
 import hashlib
 import secrets
 import json
+import threading
 
 # ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO
 from dotenv import load_dotenv
 load_dotenv()
 
 print("=" * 60)
-print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO")
-print("✅ PAGAR.ME PIX INTEGRADO - VALOR DO USUÁRIO")
-print("🎯 USUÁRIO DIGITA O VALOR NO PAGAR.ME")
+print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO COM KEEP-ALIVE")
+print("✅ SISTEMA SEMPRE ATIVO - SEM COLD START")
+print("🎯 KEEP-ALIVE AUTOMÁTICO IMPLEMENTADO")
 print("=" * 60)
+
+# ✅ KEEP-ALIVE AUTOMÁTICO
+def keep_alive_service():
+    """Serviço para manter o backend sempre ativo"""
+    def ping_server():
+        while True:
+            try:
+                # Ping na própria aplicação para evitar hibernação
+                response = requests.get(
+                    'https://allianza-wallet-backend.onrender.com/health', 
+                    timeout=10
+                )
+                print(f"🔄 Keep-alive executado: {datetime.now().strftime('%H:%M:%S')} - Status: {response.status_code}")
+            except Exception as e:
+                print(f"⚠️ Keep-alive falhou: {e}")
+            time.sleep(240)  # A cada 4 minutos (menos que timeout do Render)
+    
+    # Iniciar thread em background
+    keep_alive_thread = threading.Thread(target=ping_server, daemon=True)
+    keep_alive_thread.start()
+    print("🚀 Serviço de keep-alive iniciado - Backend sempre ativo!")
+
+# Iniciar keep-alive quando o módulo carregar
+keep_alive_service()
 
 # ✅ CONFIGURAÇÃO NOWPAYMENTS COM FALLBACK
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
@@ -1573,7 +1598,9 @@ def health_check():
         "nowpayments_webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
         "nowpayments_status": "ACTIVE" if NOWPAYMENTS_IPN_SECRET else "INACTIVE",
         "pagarme_pix_available": True,
-        "pagarme_pix_url": PAGARME_PIX_URL
+        "pagarme_pix_url": PAGARME_PIX_URL,
+        "keep_alive_active": True,
+        "response_time": "instant"
     } ), 200
 
 # ✅ Rota para informações do sistema - PRODUÇÃO (ATUALIZADA)
@@ -1596,6 +1623,11 @@ def system_info():
             "neon_database": True,
             "nowpayments_webhook": True,
             "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET)
+        },
+        "keep_alive": {
+            "active": True,
+            "interval": "4 minutes",
+            "purpose": "Prevent Render.com hibernation"
         },
         "cors_domains": [
             "http://localhost:5173",
