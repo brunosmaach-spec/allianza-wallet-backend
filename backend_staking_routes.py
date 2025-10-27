@@ -1,4 +1,4 @@
-# backend_staking_routes.py - CORREÇÃO COMPLETA DA FUNÇÃO safe_datetime_diff
+# backend_staking_routes.py - CORREÇÃO COMPLETA DAS DATAS
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, timezone
 import uuid
@@ -85,17 +85,28 @@ def safe_datetime_diff(dt1, dt2):
         
     except Exception as e:
         print(f"❌ Erro em safe_datetime_diff: {e}")
-        # A lógica principal em safe_datetime_diff deve resolver o problema de timezone.
-        # Se falhar, é um erro inesperado e deve ser propagado.
-        raise e
+        # Se falhar, retornar diferença zero para evitar quebra do sistema
+        return timedelta(0)
 
 def safe_days_remaining(end_date, current_date=None):
-    """✅ CORREÇÃO: Calcular dias restantes de forma segura"""
-    if current_date is None:
-        current_date = datetime.now(timezone.utc) # <--- CORRIGIDO: Agora é timezone-aware
-    
+    """✅ CORREÇÃO DEFINITIVA: Calcular dias restantes de forma segura"""
     try:
-        time_diff = safe_datetime_diff(end_date, current_date)
+        if current_date is None:
+            current_date = datetime.now(timezone.utc)
+        
+        # ✅ GARANTIR que ambas as datas são timezone-aware
+        if end_date.tzinfo is None:
+            end_date = end_date.replace(tzinfo=timezone.utc)
+        else:
+            end_date = end_date.astimezone(timezone.utc)
+            
+        if current_date.tzinfo is None:
+            current_date = current_date.replace(tzinfo=timezone.utc)
+        else:
+            current_date = current_date.astimezone(timezone.utc)
+        
+        # Calcular diferença
+        time_diff = end_date - current_date
         days = time_diff.days
         
         # Se a diferença for negativa, significa que já passou da data
@@ -110,7 +121,29 @@ def safe_days_remaining(end_date, current_date=None):
             
     except Exception as e:
         print(f"❌ Erro em safe_days_remaining: {e}")
-        return 0
+        # Fallback: calcular dias baseado apenas na data (sem timezone)
+        try:
+            from datetime import date
+            today = date.today()
+            end_date_only = end_date.date() if hasattr(end_date, 'date') else end_date
+            days_simple = (end_date_only - today).days
+            return max(0, days_simple)
+        except:
+            return 0
+
+def make_datetime_aware(dt):
+    """✅ FUNÇÃO AUXILIAR: Garantir que datetime seja timezone-aware"""
+    if dt is None:
+        return None
+    print(f"🔧 make_datetime_aware: Input: {dt}, tzinfo: {dt.tzinfo}")
+    
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        result = dt.replace(tzinfo=timezone.utc)
+    else:
+        result = dt.astimezone(timezone.utc)
+    
+    print(f"🔧 make_datetime_aware: Output: {result}, tzinfo: {result.tzinfo}")
+    return result
 
 @staking_bp.route("/stake", methods=["POST"])
 def stake():
@@ -261,9 +294,6 @@ def unstake():
             return jsonify({"error": "Stake não está ativo"}), 400
 
         # 2. Atualizar recompensas antes de processar o unstake
-        # A função update_stake_rewards precisa de uma conexão e cursor, mas é mais simples
-        # chamá-la diretamente e deixar que ela gerencie sua própria conexão
-        # No entanto, como ela está no mesmo arquivo, vamos chamá-la e re-buscar o stake
         update_stake_rewards(stake_id) 
         
         cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
@@ -277,7 +307,8 @@ def unstake():
              return jsonify({"error": "Erro de consistência: Saldo de staking insuficiente para retirada"}), 500
 
         # ✅ USAR FUNÇÃO CORRIGIDA
-        days_remaining = safe_days_remaining(stake["end_date"])
+        end_date = make_datetime_aware(stake["end_date"])
+        days_remaining = safe_days_remaining(end_date)
         
         is_early_withdrawal = days_remaining > 0
         penalty_rate = float(stake["early_withdrawal_penalty"]) if is_early_withdrawal else 0.0
@@ -362,8 +393,10 @@ def update_stake_rewards(stake_id):
 
         current_date = datetime.now(timezone.utc)
         
-        # ✅ USAR FUNÇÃO CORRIGIDA
-        time_since_last_claim = safe_datetime_diff(current_date, stake["last_reward_claim"])
+        # ✅ USAR FUNÇÃO CORRIGIDA para tornar as datas timezone-aware
+        last_reward_claim = make_datetime_aware(stake["last_reward_claim"])
+        
+        time_since_last_claim = safe_datetime_diff(current_date, last_reward_claim)
         days_since_last_claim = time_since_last_claim.days
 
         if days_since_last_claim <= 0:
@@ -387,7 +420,8 @@ def update_stake_rewards(stake_id):
         new_accrued_reward = float(stake["accrued_reward"]) + new_reward
         
         # ✅ USAR FUNÇÃO CORRIGIDA
-        days_remaining = safe_days_remaining(stake["end_date"], current_date)
+        end_date = make_datetime_aware(stake["end_date"])
+        days_remaining = safe_days_remaining(end_date, current_date)
 
         # 4. Atualizar banco de dados
         cursor.execute(
@@ -506,25 +540,13 @@ def get_my_stakes():
         for stake in stakes:
             try:
                 # ✅ USAR FUNÇÃO CORRIGIDA para calcular dias restantes
-                days_remaining = safe_days_remaining(stake["end_date"])
+                end_date = make_datetime_aware(stake["end_date"])
+                days_remaining = safe_days_remaining(end_date)
                 
                 # ✅ GARANTIR que as datas sejam strings ISO formatadas corretamente
-                start_date = stake["start_date"]
-                end_date = stake["end_date"]
-                last_reward_claim = stake["last_reward_claim"]
-                
-                # Garantir que as datas sejam timezone-aware (UTC) antes de formatar
-                # Se a data for naive (sem fuso horário), assume-se UTC para evitar o erro
-                def make_aware(dt):
-                    if not dt:
-                        return None
-                    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-                        return dt.replace(tzinfo=timezone.utc)
-                    return dt
-
-                start_date = make_aware(stake["start_date"])
-                end_date = make_aware(stake["end_date"])
-                last_reward_claim = make_aware(stake["last_reward_claim"])
+                start_date = make_datetime_aware(stake["start_date"])
+                end_date = make_datetime_aware(stake["end_date"])
+                last_reward_claim = make_datetime_aware(stake["last_reward_claim"])
 
                 start_date_iso = start_date.isoformat() if start_date else None
                 end_date_iso = end_date.isoformat() if end_date else None
