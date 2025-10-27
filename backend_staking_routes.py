@@ -73,12 +73,14 @@ def safe_datetime_diff(dt1, dt2):
         if dt1.tzinfo is None:
             dt1 = dt1.replace(tzinfo=timezone.utc)
         else:
-            dt1 = dt1.astimezone(timezone.utc)
+            # Se já tem timezone, garantir que é UTC
+            dt1 = dt1.astimezone(timezone.utc) if dt1.tzinfo != timezone.utc else dt1
         
         if dt2.tzinfo is None:
             dt2 = dt2.replace(tzinfo=timezone.utc)
         else:
-            dt2 = dt2.astimezone(timezone.utc)
+            # Se já tem timezone, garantir que é UTC
+            dt2 = dt2.astimezone(timezone.utc) if dt2.tzinfo != timezone.utc else dt2
         
         # Retornar a diferença
         return dt1 - dt2
@@ -98,12 +100,12 @@ def safe_days_remaining(end_date, current_date=None):
         if end_date.tzinfo is None:
             end_date = end_date.replace(tzinfo=timezone.utc)
         else:
-            end_date = end_date.astimezone(timezone.utc)
+            end_date = end_date.astimezone(timezone.utc) if end_date.tzinfo != timezone.utc else end_date
             
         if current_date.tzinfo is None:
             current_date = current_date.replace(tzinfo=timezone.utc)
         else:
-            current_date = current_date.astimezone(timezone.utc)
+            current_date = current_date.astimezone(timezone.utc) if current_date.tzinfo != timezone.utc else current_date
         
         # Calcular diferença
         time_diff = end_date - current_date
@@ -135,14 +137,13 @@ def make_datetime_aware(dt):
     """✅ FUNÇÃO AUXILIAR: Garantir que datetime seja timezone-aware"""
     if dt is None:
         return None
-    print(f"🔧 make_datetime_aware: Input: {dt}, tzinfo: {dt.tzinfo}")
     
     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
         result = dt.replace(tzinfo=timezone.utc)
     else:
+        # Se já tem timezone, converter para UTC
         result = dt.astimezone(timezone.utc)
     
-    print(f"🔧 make_datetime_aware: Output: {result}, tzinfo: {result.tzinfo}")
     return result
 
 @staking_bp.route("/stake", methods=["POST"])
