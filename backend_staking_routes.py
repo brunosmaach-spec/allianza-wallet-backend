@@ -69,40 +69,30 @@ def calculate_actual_apy(base_apy, token, duration, auto_compound):
 def safe_datetime_diff(dt1, dt2):
     """✅✅✅ CORREÇÃO CRÍTICA: Calcular diferença entre datetimes de forma segura"""
     try:
-        # Se ambos são naive (sem timezone), converter para UTC timezone-aware
-        if dt1.tzinfo is None and dt2.tzinfo is None:
+        # Garantir que ambos são timezone-aware (UTC)
+        if dt1.tzinfo is None:
             dt1 = dt1.replace(tzinfo=timezone.utc)
-            dt2 = dt2.replace(tzinfo=timezone.utc)
+        else:
+            dt1 = dt1.astimezone(timezone.utc)
         
-        # Se um tem timezone e o outro não, converter o naive para UTC
-        elif dt1.tzinfo is None and dt2.tzinfo is not None:
-            dt1 = dt1.replace(tzinfo=timezone.utc)
-        elif dt1.tzinfo is not None and dt2.tzinfo is None:
+        if dt2.tzinfo is None:
             dt2 = dt2.replace(tzinfo=timezone.utc)
-        
-        # Agora ambos têm timezone, normalizar para UTC
-        dt1_utc = dt1.astimezone(timezone.utc)
-        dt2_utc = dt2.astimezone(timezone.utc)
+        else:
+            dt2 = dt2.astimezone(timezone.utc)
         
         # Retornar a diferença
-        return dt1_utc - dt2_utc
+        return dt1 - dt2
         
     except Exception as e:
         print(f"❌ Erro em safe_datetime_diff: {e}")
-        # Fallback: converter ambos para naive
-        if hasattr(dt1, 'replace'):
-            dt1 = dt1.replace(tzinfo=None)
-        if hasattr(dt2, 'replace'):
-            dt2 = dt2.replace(tzinfo=None)
-        return dt1 - dt2
-
-def safe_days_remaining(end_date, current_date=None):
+        # A lógica principal em safe_datetime_diff deve resolver o problema de timezone.
+        # Se falhar, é um erro inesperado e deve ser propagado.
+        raise ee_days_remaining(end_date, current_date=None):
     """✅ CORREÇÃO: Calcular dias restantes de forma segura"""
     if current_date is None:
-        current_date = datetime.now(timezone.utc)
+        current_date = datetime.now(timezone.utc) # <--- CORRIGIDO: Agora é timezone-aware
     
-    try:
-        # Usar a função safe_datetime_diff corrigida
+    # ... resto da função ...corrigida
         time_diff = safe_datetime_diff(end_date, current_date)
         days = time_diff.days
         
@@ -521,21 +511,22 @@ def get_my_stakes():
                 end_date = stake["end_date"]
                 last_reward_claim = stake["last_reward_claim"]
                 
-                # Se as datas são timezone-aware, converter para string ISO
-                if hasattr(start_date, 'isoformat'):
-                    start_date_iso = start_date.isoformat()
-                else:
-                    start_date_iso = start_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-                    
-                if hasattr(end_date, 'isoformat'):
-                    end_date_iso = end_date.isoformat()
-                else:
-                    end_date_iso = end_date.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
-                    
-                if hasattr(last_reward_claim, 'isoformat'):
-                    last_reward_claim_iso = last_reward_claim.isoformat()
-                else:
-                    last_reward_claim_iso = last_reward_claim.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+	                # Garantir que as datas sejam timezone-aware (UTC) antes de formatar
+	                # Se a data for naive (sem fuso horário), assume-se UTC para evitar o erro
+	                def make_aware(dt):
+	                    if not dt:
+	                        return None
+	                    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+	                        return dt.replace(tzinfo=timezone.utc)
+	                    return dt
+	
+	                start_date = make_aware(stake["start_date"])
+	                end_date = make_aware(stake["end_date"])
+	                last_reward_claim = make_aware(stake["last_reward_claim"])
+	
+	                start_date_iso = start_date.isoformat() if start_date else None
+	                end_date_iso = end_date.isoformat() if end_date else None
+	                last_reward_claim_iso = last_reward_claim.isoformat() if last_reward_claim else None
                 
                 formatted_stakes.append({
                     "id": stake["id"],
