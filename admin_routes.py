@@ -134,7 +134,181 @@ def get_payments():
         
     except Exception as e:
         print(f"❌ Erro ao carregar pagamentos: {str(e)}")
+	        return jsonify({"error": f"Erro no servidor: {str(e)}"}), 500
+	    finally:
+	        conn.close()
+
+# ✅ ROTA PARA LISTAR TODOS OS STAKES
+@admin_bp.route('/admin/stakes', methods=['GET'])
+@admin_required
+def get_all_stakes():
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        print("📥 Buscando todos os stakes do banco...")
+        
+        # Buscar todos os stakes (ativos e inativos)
+        cursor.execute('''
+            SELECT id, user_id, asset, amount, duration, apy, start_date, end_date, 
+                   estimated_reward, accrued_reward, status, auto_compound, last_reward_claim, 
+                   days_remaining, early_withdrawal_penalty, actual_return, penalty_applied, 
+                   withdrawn_at, metadata
+            FROM stakes 
+            ORDER BY created_at DESC
+        ''')
+        stakes = cursor.fetchall()
+        
+        print(f"✅ Encontrados {len(stakes)} stakes")
+        
+        # Formatar a saída (datas, floats)
+        formatted_stakes = []
+        for stake in stakes:
+            formatted_stake = dict(stake)
+            
+            # Converter datas para ISO format
+            for key in ['start_date', 'end_date', 'last_reward_claim', 'withdrawn_at']:
+                if formatted_stake[key] and hasattr(formatted_stake[key], 'isoformat'):
+                    formatted_stake[key] = formatted_stake[key].isoformat()
+                elif formatted_stake[key]:
+                    formatted_stake[key] = formatted_stake[key].strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+            
+            # Garantir que os numéricos sejam floats
+            for key in ['amount', 'apy', 'estimated_reward', 'accrued_reward', 'early_withdrawal_penalty', 'actual_return', 'penalty_applied']:
+                if formatted_stake[key] is not None:
+                    formatted_stake[key] = float(formatted_stake[key])
+
+            formatted_stakes.append(formatted_stake)
+        
+        return jsonify({
+            "success": True,
+            "data": formatted_stakes,
+            "count": len(formatted_stakes)
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao carregar stakes: {str(e)}")
         return jsonify({"error": f"Erro no servidor: {str(e)}"}), 500
+    finally:
+        conn.close()
+
+# ✅ ROTA PARA UNSTAKE FORÇADO PELO ADMIN
+@admin_bp.route('/admin/unstake', methods=['POST'])
+@admin_required
+def admin_unstake():
+    # Importações necessárias para a lógica de unstake
+    from datetime import datetime, timezone
+    from backend_staking_routes import safe_days_remaining, update_stake_rewards
+    
+    data = request.json
+    stake_id = data.get('stake_id')
+    user_id = data.get('user_id')
+    confirm_early_withdrawal = data.get('confirm_early_withdrawal', False)
+    
+    if not stake_id or not user_id:
+        return jsonify({"error": "stake_id e user_id são obrigatórios"}), 400
+
+    conn = get_db_connection()
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    try:
+        # 1. Buscar o stake
+        cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
+        stake = cursor.fetchone()
+        
+        if not stake:
+            return jsonify({"error": "Stake não encontrado"}), 404
+        
+        if stake["status"] != "active":
+            return jsonify({"error": "Stake não está ativo"}), 400
+
+        # 2. Atualizar recompensas antes de processar o unstake
+        # Nota: update_stake_rewards gerencia sua própria conexão, então é seguro chamar.
+        update_stake_rewards(stake_id) 
+        
+        # Re-buscar o stake após a atualização de recompensas
+        cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
+        stake = cursor.fetchone()
+        
+        # 3. Buscar o saldo de staking para o asset
+        cursor.execute("SELECT staking_balance FROM balances WHERE user_id = %s AND asset = %s", (user_id, stake["asset"]))
+        balance_result = cursor.fetchone()
+        
+        if not balance_result or float(balance_result["staking_balance"]) < float(stake["amount"]):
+             return jsonify({"error": "Erro de consistência: Saldo de staking insuficiente para retirada"}), 500
+
+        # ✅ USAR FUNÇÃO CORRIGIDA
+        days_remaining = safe_days_remaining(stake["end_date"])
+        
+        is_early_withdrawal = days_remaining > 0
+        penalty_rate = float(stake["early_withdrawal_penalty"]) if is_early_withdrawal else 0.0
+        penalty_amount = float(stake["amount"]) * penalty_rate if is_early_withdrawal else 0.0
+        
+        return_amount = float(stake["amount"]) - penalty_amount
+        accrued_reward = float(stake["accrued_reward"])
+
+        # 4. Confirmação de retirada antecipada
+        if is_early_withdrawal and not confirm_early_withdrawal:
+            return jsonify({
+                "requires_confirmation": True,
+                "warning": "RETIRADA ANTECIPADA DETECTADA",
+                "penalty_rate": f"{penalty_rate * 100}%",
+                "penalty_amount": penalty_amount,
+                "original_amount": float(stake["amount"]),
+                "return_amount": return_amount,
+                "accrued_rewards": accrued_reward,
+                "days_remaining": days_remaining,
+                "message": "Confirmação de retirada antecipada necessária."
+            }), 400
+
+        cursor.execute("BEGIN")
+
+        # 5. Registrar no ledger (devolução do principal)
+        cursor.execute(
+            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
+            (user_id, stake["asset"], return_amount, "unstake_principal", stake_id, 
+             f"Retirada do principal do staking {stake_id} (Penalidade: {penalty_amount:.6f}) - ADMIN")
+        )
+
+        # 6. Registrar no ledger (recompensa acumulada)
+        if accrued_reward > 0:
+            cursor.execute(
+                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, related_id, description) VALUES (%s, %s, %s, %s, %s, %s)",
+                (user_id, stake["asset"], accrued_reward, "unstake_reward", stake_id, 
+                 f"Recompensa acumulada do staking {stake_id} - ADMIN")
+            )
+
+        # 7. Atualizar saldos (devolver principal + recompensa)
+        total_return = return_amount + accrued_reward
+        cursor.execute(
+            "UPDATE balances SET available = available + %s, staking_balance = staking_balance - %s WHERE user_id = %s AND asset = %s",
+            (total_return, stake["amount"], user_id, stake["asset"])
+        )
+
+        # 8. Atualizar registro de stake
+        new_status = "withdrawn_early" if is_early_withdrawal else "withdrawn_mature"
+        now = datetime.now(timezone.utc)
+        cursor.execute(
+            "UPDATE stakes SET status = %s, actual_return = %s, penalty_applied = %s, withdrawn_at = %s WHERE id = %s",
+            (new_status, total_return, penalty_amount, now, stake_id)
+        )
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": f"Staking {stake_id} retirado com sucesso pelo ADMIN.",
+            "total_received": total_return,
+            "returned_amount": return_amount,
+            "accrued_rewards": accrued_reward,
+            "penalty_applied": penalty_amount,
+            "status": new_status
+        }), 200
+
+    except Exception as e:
+        conn.rollback()
+        print(f"[ADMIN UNSTAKE] Erro: {e}")
+        return jsonify({"error": f"Erro ao retirar staking: {e}"}), 500
     finally:
         conn.close()
 
