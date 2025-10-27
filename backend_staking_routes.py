@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, timezone
 import uuid
 import math
+import json
 from database_neon import get_db_connection
 
 staking_bp = Blueprint("staking", __name__)
@@ -192,7 +193,7 @@ def stake():
             (stake_id, user_id, token, amount, duration, actual_apy, start_date, end_date, 
              round(estimated_reward, 6), 0.0, "active", auto_compound, start_date, duration,
              staking_option["early_withdrawal_penalty"],
-             {
+             json.dumps({
                  "token_name": supported_tokens[token]["name"],
                  "base_apy": base_apy,
                  "actual_apy": actual_apy,
@@ -257,6 +258,7 @@ def unstake():
     cursor = conn.cursor()
     
     try:
+        # 1. Buscar o stake
         cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
         stake = cursor.fetchone()
         
@@ -265,6 +267,22 @@ def unstake():
         
         if stake["status"] != "active":
             return jsonify({"error": "Stake não está ativo"}), 400
+
+        # 2. Atualizar recompensas antes de processar o unstake
+        # A função update_stake_rewards precisa de uma conexão e cursor, mas é mais simples
+        # chamá-la diretamente e deixar que ela gerencie sua própria conexão
+        # No entanto, como ela está no mesmo arquivo, vamos chamá-la e re-buscar o stake
+        update_stake_rewards(stake_id) 
+        
+        cursor.execute("SELECT * FROM stakes WHERE id = %s AND user_id = %s", (stake_id, user_id))
+        stake = cursor.fetchone()
+        
+        # 3. Buscar o saldo de staking para o asset
+        cursor.execute("SELECT staking_balance FROM balances WHERE user_id = %s AND asset = %s", (user_id, stake["asset"]))
+        balance_result = cursor.fetchone()
+        
+        if not balance_result or float(balance_result["staking_balance"]) < float(stake["amount"]):
+             return jsonify({"error": "Erro de consistência: Saldo de staking insuficiente para retirada"}), 500
 
         # ✅ USAR FUNÇÃO CORRIGIDA
         days_remaining = safe_days_remaining(stake["end_date"])
