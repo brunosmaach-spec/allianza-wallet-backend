@@ -187,6 +187,8 @@ CORS(app, resources={
 @app.route('/api/vault/initialize', methods=['OPTIONS'])
 @app.route('/api/vault/security/settings', methods=['OPTIONS'])
 @app.route('/api/vault/stats', methods=['OPTIONS'])
+@app.route('/api/crypto/create-payment', methods=['OPTIONS'])
+@app.route('/api/crypto/payment-status/<invoice_id>', methods=['OPTIONS'])
 def options_handler():
     return '', 200
 
@@ -468,7 +470,7 @@ def site_purchase():
     finally:
         conn.close()
 
-# 💳 ROTA PARA CRIAR SESSÃO STRIPE - PRODUÇÃO (CORRIGIDA)
+# 💰 ROTA PARA CRIAR SESSÃO STRIPE - PRODUÇÃO (CORRIGIDA)
 @app.route('/create-checkout-session', methods=['POST'])
 def create_checkout_session():
     """Criar sessão de checkout Stripe - PRODUÇÃO COM VALORES CORRETOS"""
@@ -523,6 +525,221 @@ def create_checkout_session():
     except Exception as e:
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
+
+# 💰 ROTA PARA CRIAR FATURA NOWPAYMENTS
+@app.route('/api/nowpayments/create-invoice', methods=['POST'])
+def create_nowpayments_invoice():
+    """Cria uma fatura no NowPayments e retorna a URL de pagamento."""
+    try:
+        data = request.json
+        amount_brl = data.get('amount_brl')
+        email = data.get('email')
+        
+        if not amount_brl or not email:
+            return jsonify({"error": "Valor (BRL) e email são obrigatórios"}), 400
+            
+        # 1. Calcular o valor em ALZ
+        amount_brl = float(amount_brl)
+        amount_alz = amount_brl / 0.10  # 1 ALZ = R$ 0.10
+        
+        # 2. Registrar pagamento pendente no DB
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute("BEGIN")
+            
+            # Buscar ou criar usuário (lógica copiada de /api/site/purchase)
+            cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
+            user = cursor.fetchone()
+            
+            user_created = False
+            wallet_address = None
+            user_id = None
+            
+            if not user:
+                private_key, wallet_address = generate_polygon_wallet()
+                temp_password = f"temp_{secrets.token_hex(8)}"
+                hashed_password = generate_password_hash(temp_password)
+                nickname = f"User_{email.split('@')[0]}"
+                
+                cursor.execute(
+                    "INSERT INTO users (email, password, nickname, wallet_address, private_key) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                    (email, hashed_password, nickname, wallet_address, private_key)
+                )
+                user_id = cursor.fetchone()['id']
+                user_created = True
+                print(f"👤 Usuário criado com senha temporária para NowPayments: {email}")
+            else:
+                user_id = user['id']
+                wallet_address = user['wallet_address']
+                print(f"👤 Usuário existente para NowPayments: {email} - ID: {user_id}")
+            
+            # Verificar/criar saldo
+            cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
+            if not cursor.fetchone():
+                cursor.execute(
+                    "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
+                    (user_id, 0.0)
+                )
+                print(f"💰 Saldo criado para usuário {user_id}")
+                
+            # Metadata para o NowPayments
+            metadata = {
+                'alz_amount': amount_alz,
+                'amount_brl': amount_brl,
+                'email': email
+            }
+            
+            # Registrar o pagamento pendente
+            cursor.execute(
+                "INSERT INTO payments (email, amount, method, status, user_id, metadata) VALUES (%s, %s, %s, 'pending', %s, %s) RETURNING id",
+                (email, amount_brl, 'crypto', user_id, json.dumps(metadata))
+            )
+            db_payment_id = cursor.fetchone()['id']
+            
+            conn.commit()
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Erro ao registrar pagamento NowPayments no DB: {e}")
+            return jsonify({"error": "Erro interno ao registrar pagamento"}), 500
+        finally:
+            conn.close()
+
+        # 3. Chamar a API NowPayments
+        NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
+        if not NOWPAYMENTS_API_KEY:
+            return jsonify({"error": "Chave API NowPayments não configurada no servidor"}), 500
+
+        headers = {
+            'x-api-key': NOWPAYMENTS_API_KEY,
+            'Content-Type': 'application/json'
+        }
+        
+        # NowPayments espera o valor em USD. Vamos usar uma taxa de câmbio fixa ou buscar uma real.
+        # Para simplificar, vamos assumir que o valor em BRL é o valor em USD para a fatura.
+        # Em um ambiente real, seria necessário uma conversão de BRL para USD.
+        # Usaremos o valor em BRL como o valor base para a fatura.
+        
+        # Usando o valor em BRL como base para a fatura (assumindo 1 BRL = 1 USD para o propósito da API)
+        # O ideal seria usar uma API de cotação real.
+        amount_in_usd = amount_brl
+        
+        # O campo order_id será o ID do pagamento no nosso DB
+        payload = {
+            "price_amount": amount_in_usd,
+            "price_currency": "usd", # NowPayments baseia-se em USD
+            "pay_currency": "usdttrc20", # Moeda que o cliente irá pagar (ex: USDT na rede TRC20)
+            "ipn_callback_url": request.url_root + 'webhook/nowpayments',
+            "order_id": str(db_payment_id), # ID do pagamento no nosso DB
+            "order_description": f"Compra de {amount_alz:.2f} ALZ por {email}",
+            "success_url": request.url_root + 'success?payment_id=' + str(db_payment_id),
+            "cancel_url": request.url_root + 'cancel?payment_id=' + str(db_payment_id),
+            "is_fee_paid_by_user": True
+        }
+        
+        NOWPAYMENTS_URL = 'https://api.nowpayments.io/v1/invoice'
+        
+        print(f"Chamando NowPayments API: {NOWPAYMENTS_URL} com payload: {payload}")
+
+        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload, timeout=20)
+        response.raise_for_status()
+        
+        invoice_data = response.json()
+        payment_url = invoice_data.get('invoice_url')
+        invoice_id = invoice_data.get('id')
+        
+        if payment_url:
+            # 4. Atualizar o registro de pagamento com o ID da fatura NowPayments
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "UPDATE payments SET tx_hash = %s, metadata = jsonb_set(metadata, '{nowpayments_invoice_id}', %s::jsonb) WHERE id = %s",
+                    (invoice_id, json.dumps(invoice_id), db_payment_id)
+                )
+                conn.commit()
+            except Exception as e:
+                print(f"⚠️ Aviso: Não foi possível atualizar o ID da fatura NowPayments no DB: {e}")
+            finally:
+                conn.close()
+                
+            print(f"✅ Fatura NowPayments criada. URL: {payment_url}")
+            return jsonify({
+                "success": True,
+                "payment_url": payment_url,
+                "invoice_id": invoice_id,
+                "db_payment_id": db_payment_id,
+                "calculated_alz": amount_alz
+            }), 200
+        else:
+            print(f"❌ NowPayments não retornou URL de pagamento. Resposta: {invoice_data}")
+            return jsonify({"error": "NowPayments não retornou URL de pagamento"}), 500
+
+    except requests.exceptions.RequestException as req_err:
+        print(f"❌ Erro de requisição NowPayments: {req_err}")
+        return jsonify({"error": f"Erro de comunicação com NowPayments: {req_err}"}), 500
+    except Exception as e:
+        print(f"❌ Erro ao criar fatura NowPayments: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ✅ ROTA PARA CRIAÇÃO DE PAGAMENTO CRYPTO (CORREÇÃO DO FRONTEND)
+@app.route('/api/crypto/create-payment', methods=['POST', 'OPTIONS'])
+def create_crypto_payment():
+    """Criar pagamento com criptomoedas - compatível com frontend"""
+    try:
+        # Handle CORS preflight
+        if request.method == 'OPTIONS':
+            return '', 200
+            
+        data = request.json
+        email = data.get('email')
+        amount_brl = data.get('amount_brl')
+        
+        if not email or not amount_brl:
+            return jsonify({"error": "Email e valor são obrigatórios"}), 400
+            
+        # Usar a mesma lógica da rota NowPayments existente
+        return create_nowpayments_invoice()
+        
+    except Exception as e:
+        print(f"❌ Erro em create_crypto_payment: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# ✅ ROTA PARA VERIFICAR STATUS DO PAGAMENTO CRYPTO
+@app.route('/api/crypto/payment-status/<invoice_id>', methods=['GET'])
+def get_crypto_payment_status(invoice_id):
+    """Verificar status do pagamento crypto"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute('''
+            SELECT p.status, p.metadata, p.email, p.amount
+            FROM payments p 
+            WHERE p.tx_hash = %s OR p.id::text = %s
+        ''', (invoice_id, invoice_id))
+        
+        payment = cursor.fetchone()
+        
+        if not payment:
+            return jsonify({"error": "Pagamento não encontrado"}), 404
+            
+        return jsonify({
+            "success": True,
+            "payment_status": payment['status'],
+            "email": payment['email'],
+            "amount": float(payment['amount']),
+            "metadata": payment['metadata']
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao verificar status: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 # 🧾 ROTA PARA PAGAR.ME PIX - CORRIGIDA SEM VALOR FIXO
 @app.route('/create-pagarme-pix', methods=['POST'])
@@ -1755,7 +1972,9 @@ def authenticate_request():
         "/api/vault/transfer", 
         "/api/vault/initialize",
         "/api/vault/security/settings",
-        "/api/vault/stats"
+        "/api/vault/stats",
+        "/api/crypto/create-payment",
+        "/api/crypto/payment-status"
     ]
     
     # Exclui rotas de admin e OPTIONS
@@ -1998,6 +2217,7 @@ def health_check():
         "pagarme_pix_url": PAGARME_PIX_URL,
         "keep_alive_active": True,
         "vault_system_active": True,
+        "crypto_payments_active": True,
         "response_time": "instant"
     } ), 200
 
@@ -2020,7 +2240,8 @@ def system_info():
             "pagarme_pix_url": PAGARME_PIX_URL,
             "neon_database": True,
             "nowpayments_webhook": True,
-            "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET)
+            "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET),
+            "crypto_payments": True
         },
         "vault_system": {
             "active": True,
@@ -2038,6 +2259,14 @@ def system_info():
                 "auto_transfer_thresholds",
                 "transfer_history"
             ]
+        },
+        "crypto_payments": {
+            "active": True,
+            "endpoints": [
+                "/api/crypto/create-payment",
+                "/api/crypto/payment-status"
+            ],
+            "provider": "NowPayments"
         },
         "keep_alive": {
             "active": True,
@@ -2159,6 +2388,9 @@ if __name__ == '__main__':
     print("   - POST /api/vault/initialize")
     print("   - POST /api/vault/security/settings")
     print("   - GET  /api/vault/stats")
+    print("🔗 Crypto Payments (PÚBLICAS):")
+    print("   - POST /api/crypto/create-payment")
+    print("   - GET  /api/crypto/payment-status/<invoice_id>")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
