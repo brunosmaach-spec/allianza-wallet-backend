@@ -1,4 +1,4 @@
-# backend_wallet_integration.py - PRODUÇÃO COM KEEP-ALIVE
+# backend_wallet_integration.py - PRODUÇÃO COM KEEP-ALIVE E COFRE
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -22,6 +22,7 @@ print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO COM KEEP-ALIVE")
 print("✅ SISTEMA SEMPRE ATIVO - SEM COLD START")
 print("🎯 KEEP-ALIVE AUTOMÁTICO IMPLEMENTADO")
+print("🔒 COFRE SEGURO IMPLEMENTADO")
 print("=" * 60)
 
 # ✅ KEEP-ALIVE AUTOMÁTICO
@@ -181,6 +182,11 @@ CORS(app, resources={
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])
 @app.route('/api/nowpayments/check-config', methods=['OPTIONS'])
 @app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])
+@app.route('/api/vault/balance', methods=['OPTIONS'])
+@app.route('/api/vault/transfer', methods=['OPTIONS'])
+@app.route('/api/vault/initialize', methods=['OPTIONS'])
+@app.route('/api/vault/security/settings', methods=['OPTIONS'])
+@app.route('/api/vault/stats', methods=['OPTIONS'])
 def options_handler():
     return '', 200
 
@@ -1328,6 +1334,392 @@ def check_tables():
     finally:
         conn.close()
 
+# ==================== ROTAS DO COFRE SEGURO ====================
+
+def calculate_security_level(cold_percentage):
+    """Calcular nível de segurança baseado na porcentagem no cold wallet"""
+    if cold_percentage >= 80:
+        return 'maximum'
+    elif cold_percentage >= 60:
+        return 'high'
+    elif cold_percentage >= 40:
+        return 'medium'
+    else:
+        return 'low'
+
+@app.route('/api/vault/balance', methods=['GET'])
+def get_vault_balance():
+    """Obter saldo do cofre do usuário"""
+    user_id = request.args.get('user_id')
+    
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Buscar ou criar registro do cofre
+        cursor.execute('''
+            INSERT INTO vault_balances (user_id, hot_wallet, cold_wallet) 
+            VALUES (%s, 0.0, 0.0)
+            ON CONFLICT (user_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            RETURNING hot_wallet, cold_wallet, security_level, auto_transfer_threshold, transfer_count, last_transfer_at
+        ''', (user_id,))
+        
+        result = cursor.fetchone()
+        
+        total_balance = float(result['hot_wallet'] + result['cold_wallet'])
+        cold_percentage = (float(result['cold_wallet']) / total_balance * 100) if total_balance > 0 else 0
+        
+        vault_data = {
+            "hot_wallet": float(result['hot_wallet']),
+            "cold_wallet": float(result['cold_wallet']),
+            "security_level": result['security_level'],
+            "auto_transfer_threshold": float(result['auto_transfer_threshold']),
+            "transfer_count": result['transfer_count'],
+            "total_balance": total_balance,
+            "cold_percentage": cold_percentage,
+            "last_transfer_at": result['last_transfer_at'].isoformat() if result['last_transfer_at'] else None
+        }
+        
+        conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "vault": vault_data
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro ao buscar saldo do cofre: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/vault/transfer', methods=['POST'])
+def transfer_between_wallets():
+    """Transferir entre hot e cold wallet"""
+    data = request.json
+    user_id = data.get('user_id')
+    amount = data.get('amount')
+    direction = data.get('direction')  # 'to_cold' ou 'to_hot'
+    description = data.get('description', 'Transferência entre carteiras')
+    
+    if not all([user_id, amount, direction]):
+        return jsonify({"error": "user_id, amount e direction são obrigatórios"}), 400
+    
+    try:
+        amount = float(amount)
+        if amount <= 0:
+            return jsonify({"error": "Amount deve ser positivo"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "Amount deve ser um número válido"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        # Buscar saldo atual do cofre com bloqueio para evitar condições de corrida
+        cursor.execute('''
+            SELECT hot_wallet, cold_wallet 
+            FROM vault_balances 
+            WHERE user_id = %s 
+            FOR UPDATE
+        ''', (user_id,))
+        
+        vault_balance = cursor.fetchone()
+        
+        if not vault_balance:
+            # Criar registro se não existir
+            cursor.execute('''
+                INSERT INTO vault_balances (user_id, hot_wallet, cold_wallet) 
+                VALUES (%s, 0.0, 0.0)
+                RETURNING hot_wallet, cold_wallet
+            ''', (user_id,))
+            vault_balance = cursor.fetchone()
+        
+        # Verificar saldo suficiente
+        if direction == 'to_cold':
+            if amount > float(vault_balance['hot_wallet']):
+                return jsonify({"error": "Saldo insuficiente na hot wallet"}), 400
+            
+            new_hot = float(vault_balance['hot_wallet']) - amount
+            new_cold = float(vault_balance['cold_wallet']) + amount
+            
+        elif direction == 'to_hot':
+            if amount > float(vault_balance['cold_wallet']):
+                return jsonify({"error": "Saldo insuficiente na cold wallet"}), 400
+            
+            new_hot = float(vault_balance['hot_wallet']) + amount
+            new_cold = float(vault_balance['cold_wallet']) - amount
+        
+        else:
+            return jsonify({"error": "Direction deve ser 'to_cold' ou 'to_hot'"}), 400
+        
+        # Atualizar saldos
+        cursor.execute('''
+            UPDATE vault_balances 
+            SET hot_wallet = %s, 
+                cold_wallet = %s,
+                last_transfer_at = CURRENT_TIMESTAMP,
+                transfer_count = transfer_count + 1,
+                security_level = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        ''', (new_hot, new_cold, 
+              calculate_security_level((new_cold / (new_hot + new_cold)) * 100 if (new_hot + new_cold) > 0 else 0),
+              user_id))
+        
+        # Registrar no ledger
+        entry_type = 'transfer_to_cold' if direction == 'to_cold' else 'transfer_to_hot'
+        ledger_description = f"{description} - {amount} ALZ"
+        
+        cursor.execute('''
+            INSERT INTO ledger_entries 
+            (user_id, asset, amount, entry_type, description, idempotency_key)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (user_id, 'ALZ', amount, entry_type, ledger_description, 
+              f"vault_transfer_{user_id}_{datetime.now().timestamp()}"))
+        
+        conn.commit()
+        
+        # Retornar dados atualizados
+        cursor.execute('''
+            SELECT hot_wallet, cold_wallet, security_level, transfer_count, last_transfer_at
+            FROM vault_balances WHERE user_id = %s
+        ''', (user_id,))
+        
+        updated_balance = cursor.fetchone()
+        total = float(updated_balance['hot_wallet'] + updated_balance['cold_wallet'])
+        cold_percentage = (float(updated_balance['cold_wallet']) / total * 100) if total > 0 else 0
+        
+        return jsonify({
+            "success": True,
+            "message": f"Transferência de {amount} ALZ realizada com sucesso",
+            "vault": {
+                "hot_wallet": float(updated_balance['hot_wallet']),
+                "cold_wallet": float(updated_balance['cold_wallet']),
+                "total_balance": total,
+                "cold_percentage": cold_percentage,
+                "security_level": updated_balance['security_level'],
+                "transfer_count": updated_balance['transfer_count'],
+                "last_transfer_at": updated_balance['last_transfer_at'].isoformat() if updated_balance['last_transfer_at'] else None
+            }
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro na transferência do cofre: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/vault/initialize', methods=['POST'])
+def initialize_vault():
+    """Inicializar cofre com saldo inicial"""
+    data = request.json
+    user_id = data.get('user_id')
+    initial_balance = data.get('initial_balance', 0)
+    
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório"}), 400
+    
+    try:
+        initial_balance = float(initial_balance)
+        if initial_balance < 0:
+            return jsonify({"error": "Saldo inicial não pode ser negativo"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "Saldo inicial deve ser um número válido"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        # Verificar se já existe
+        cursor.execute('SELECT user_id FROM vault_balances WHERE user_id = %s', (user_id,))
+        existing_vault = cursor.fetchone()
+        
+        if existing_vault:
+            return jsonify({"error": "Cofre já inicializado para este usuário"}), 400
+        
+        # Distribuir saldo inicial (80% cold, 20% hot por padrão)
+        cold_amount = initial_balance * 0.8
+        hot_amount = initial_balance * 0.2
+        
+        cursor.execute('''
+            INSERT INTO vault_balances 
+            (user_id, hot_wallet, cold_wallet, security_level) 
+            VALUES (%s, %s, %s, %s)
+        ''', (user_id, hot_amount, cold_amount, 'maximum'))
+        
+        # Registrar no ledger se houver saldo inicial
+        if initial_balance > 0:
+            cursor.execute('''
+                INSERT INTO ledger_entries 
+                (user_id, asset, amount, entry_type, description, idempotency_key)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            ''', (user_id, 'ALZ', initial_balance, 'vault_initialization', 
+                  f"Inicialização do cofre com {initial_balance} ALZ",
+                  f"vault_init_{user_id}_{datetime.now().timestamp()}"))
+        
+        conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": f"Cofre inicializado com {initial_balance} ALZ",
+            "vault": {
+                "hot_wallet": float(hot_amount),
+                "cold_wallet": float(cold_amount),
+                "total_balance": float(initial_balance),
+                "cold_percentage": 80.0,
+                "security_level": 'maximum',
+                "transfer_count": 0
+            }
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro ao inicializar cofre: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/vault/security/settings', methods=['POST'])
+def update_security_settings():
+    """Atualizar configurações de segurança do cofre"""
+    data = request.json
+    user_id = data.get('user_id')
+    auto_transfer_threshold = data.get('auto_transfer_threshold')
+    security_level = data.get('security_level')
+    
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        # Verificar se cofre existe
+        cursor.execute('SELECT user_id FROM vault_balances WHERE user_id = %s', (user_id,))
+        if not cursor.fetchone():
+            return jsonify({"error": "Cofre não encontrado para este usuário"}), 404
+        
+        update_fields = []
+        params = []
+        
+        if auto_transfer_threshold is not None:
+            try:
+                threshold = float(auto_transfer_threshold)
+                if threshold < 0:
+                    return jsonify({"error": "Threshold não pode ser negativo"}), 400
+                update_fields.append("auto_transfer_threshold = %s")
+                params.append(threshold)
+            except (ValueError, TypeError):
+                return jsonify({"error": "Auto transfer threshold deve ser um número válido"}), 400
+        
+        if security_level and security_level in ['low', 'medium', 'high', 'maximum']:
+            update_fields.append("security_level = %s")
+            params.append(security_level)
+        
+        if not update_fields:
+            return jsonify({"error": "Nenhum campo para atualizar"}), 400
+        
+        params.append(user_id)
+        
+        cursor.execute(f'''
+            UPDATE vault_balances 
+            SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        ''', params)
+        
+        conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Configurações de segurança atualizadas com sucesso"
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro ao atualizar configurações de segurança: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/vault/stats', methods=['GET'])
+def get_vault_stats():
+    """Obter estatísticas do cofre"""
+    user_id = request.args.get('user_id')
+    
+    if not user_id:
+        return jsonify({"error": "user_id é obrigatório"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # Estatísticas do cofre
+        cursor.execute('''
+            SELECT 
+                hot_wallet,
+                cold_wallet,
+                security_level,
+                transfer_count,
+                last_transfer_at,
+                auto_transfer_threshold
+            FROM vault_balances 
+            WHERE user_id = %s
+        ''', (user_id,))
+        
+        vault_data = cursor.fetchone()
+        
+        if not vault_data:
+            return jsonify({"error": "Cofre não encontrado"}), 404
+        
+        total = float(vault_data['hot_wallet'] + vault_data['cold_wallet'])
+        cold_percentage = (float(vault_data['cold_wallet']) / total * 100) if total > 0 else 0
+        
+        # Estatísticas de transferências recentes
+        cursor.execute('''
+            SELECT COUNT(*) as recent_transfers
+            FROM ledger_entries 
+            WHERE user_id = %s 
+            AND entry_type IN ('transfer_to_cold', 'transfer_to_hot')
+            AND created_at >= CURRENT_TIMESTAMP - INTERVAL '7 days'
+        ''', (user_id,))
+        
+        recent_stats = cursor.fetchone()
+        
+        stats = {
+            "total_balance": total,
+            "hot_wallet": float(vault_data['hot_wallet']),
+            "cold_wallet": float(vault_data['cold_wallet']),
+            "cold_percentage": cold_percentage,
+            "security_level": vault_data['security_level'],
+            "total_transfers": vault_data['transfer_count'],
+            "recent_transfers_7d": recent_stats['recent_transfers'],
+            "auto_transfer_threshold": float(vault_data['auto_transfer_threshold']),
+            "last_transfer": vault_data['last_transfer_at'].isoformat() if vault_data['last_transfer_at'] else None
+        }
+        
+        return jsonify({
+            "success": True,
+            "stats": stats
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao buscar estatísticas do cofre: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
 # ===== ROTAS EXISTENTES DA WALLET =====
 
 # 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
@@ -1359,6 +1751,11 @@ def authenticate_request():
         "/debug/stripe",
         "/api/nowpayments/check-config",
         "/api/nowpayments/test-webhook",
+        "/api/vault/balance",
+        "/api/vault/transfer", 
+        "/api/vault/initialize",
+        "/api/vault/security/settings",
+        "/api/vault/stats"
     ]
     
     # Exclui rotas de admin e OPTIONS
@@ -1600,6 +1997,7 @@ def health_check():
         "pagarme_pix_available": True,
         "pagarme_pix_url": PAGARME_PIX_URL,
         "keep_alive_active": True,
+        "vault_system_active": True,
         "response_time": "instant"
     } ), 200
 
@@ -1623,6 +2021,23 @@ def system_info():
             "neon_database": True,
             "nowpayments_webhook": True,
             "nowpayments_configured": bool(NOWPAYMENTS_IPN_SECRET)
+        },
+        "vault_system": {
+            "active": True,
+            "endpoints": [
+                "/api/vault/balance",
+                "/api/vault/transfer", 
+                "/api/vault/initialize",
+                "/api/vault/security/settings",
+                "/api/vault/stats"
+            ],
+            "features": [
+                "hot_wallet_management",
+                "cold_wallet_protection", 
+                "security_levels",
+                "auto_transfer_thresholds",
+                "transfer_history"
+            ]
         },
         "keep_alive": {
             "active": True,
@@ -1738,6 +2153,12 @@ if __name__ == '__main__':
     print("   - GET  /api/nowpayments/check-config")
     print("   - POST /api/nowpayments/test-webhook")
     print("   - POST /webhook/nowpayments")
+    print("🔗 Cofre Seguro (PÚBLICAS):")
+    print("   - GET  /api/vault/balance")
+    print("   - POST /api/vault/transfer")
+    print("   - POST /api/vault/initialize")
+    print("   - POST /api/vault/security/settings")
+    print("   - GET  /api/vault/stats")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
