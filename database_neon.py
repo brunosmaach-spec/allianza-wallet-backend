@@ -1,4 +1,4 @@
-# database_neon.py - COMPLETO E CORRIGIDO
+# database_neon.py - COMPLETO E CORRIGIDO COM COFRE
 import os
 import psycopg
 from psycopg.rows import dict_row
@@ -35,7 +35,7 @@ class NeonDatabase:
             raise
 
     def init_db(self):
-        """Inicializar tabelas no Neon - CORRIGIDO"""
+        """Inicializar tabelas no Neon - CORRIGIDO COM COFRE"""
         conn = None
         
         try:
@@ -71,6 +71,22 @@ class NeonDatabase:
                 );
             ''')
             print("✅ Tabela 'balances' criada/verificada")
+
+            # ✅ TABELA DO COFRE ADICIONADA
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS vault_balances (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    hot_wallet NUMERIC(20,8) DEFAULT 0.0 NOT NULL,
+                    cold_wallet NUMERIC(20,8) DEFAULT 0.0 NOT NULL,
+                    last_transfer_at TIMESTAMPTZ,
+                    transfer_count INTEGER DEFAULT 0,
+                    security_level VARCHAR(20) DEFAULT 'medium',
+                    auto_transfer_threshold NUMERIC(20,8) DEFAULT 1000.0,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+            ''')
+            print("✅ Tabela 'vault_balances' criada/verificada")
             
             # Tabela de ledger
             cursor.execute('''
@@ -197,6 +213,10 @@ class NeonDatabase:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_ledger_created_at ON ledger_entries(created_at);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_user_id ON stakes(user_id);')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_stakes_status ON stakes(status);')
+            
+            # ✅ Índices para o cofre
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_vault_balances_user_id ON vault_balances(user_id);')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_vault_balances_security_level ON vault_balances(security_level);')
             
             # ✅ CORREÇÃO: Verificar se a coluna asset existe antes de criar índice
             cursor.execute("""
