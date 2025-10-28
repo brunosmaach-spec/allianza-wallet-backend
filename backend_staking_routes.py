@@ -1,4 +1,4 @@
-# backend_staking_routes.py - CORRIGIDO
+# backend_staking_routes_improved.py - COM RETIRADA INDIVIDUALIZADA E CARDS
 from flask import Blueprint, request, jsonify
 from datetime import datetime, timedelta, timezone
 import time
@@ -90,6 +90,73 @@ def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=Non
     
     return max(rewards, 0), days_elapsed
 
+def calculate_days_remaining(end_date):
+    """Calculate days remaining until maturity"""
+    now = datetime.now(timezone.utc)
+    end_date_aware = safe_datetime_aware(end_date)
+    days_remaining = (end_date_aware - now).total_seconds() / (24 * 3600)
+    return max(days_remaining, 0)
+
+def build_stake_card(stake_dict, plan_config):
+    """Build a detailed card object for a stake with all relevant information"""
+    start_date = safe_datetime_aware(stake_dict['start_date'])
+    end_date = safe_datetime_aware(stake_dict['end_date'])
+    current_time = datetime.now(timezone.utc)
+    
+    # Calculate current rewards
+    pending_rewards, days_elapsed = calculate_staking_rewards(
+        stake_dict['amount'],
+        plan_config['apy'],
+        start_date,
+        safe_datetime_aware(stake_dict.get('last_reward_claim')) if stake_dict.get('last_reward_claim') else None
+    )
+    
+    # Calculate days remaining
+    days_remaining = calculate_days_remaining(end_date)
+    is_mature = current_time >= end_date
+    is_early = current_time < end_date
+    
+    # Calculate penalty if early withdrawal
+    penalty_amount = 0
+    penalty_percentage = 0
+    if is_early:
+        penalty_percentage = plan_config['early_unstake_penalty'] * 100
+        penalty_amount = stake_dict['amount'] * plan_config['early_unstake_penalty']
+    
+    # Calculate final amounts
+    amount_after_penalty = stake_dict['amount'] - penalty_amount
+    total_with_rewards = amount_after_penalty + pending_rewards if not is_early else amount_after_penalty
+    
+    return {
+        "stake_id": stake_dict['id'],
+        "amount": float(stake_dict['amount']),
+        "staking_plan": stake_dict['staking_plan'],
+        "plan_name": plan_config['name'],
+        "apy": plan_config['apy'] * 100,  # Convert to percentage
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+        "status": stake_dict['status'],
+        "is_mature": is_mature,
+        "is_early": is_early,
+        "days_elapsed": round(days_elapsed, 2),
+        "days_remaining": round(days_remaining, 2),
+        "current_rewards": float(pending_rewards),
+        "total_rewards_claimed": float(stake_dict.get('total_rewards_claimed') or 0),
+        "penalty": {
+            "percentage": penalty_percentage,
+            "amount": float(penalty_amount),
+            "applies": is_early
+        },
+        "withdrawal_preview": {
+            "original_amount": float(stake_dict['amount']),
+            "penalty_deducted": float(penalty_amount),
+            "amount_after_penalty": float(amount_after_penalty),
+            "rewards_to_receive": float(pending_rewards if not is_early else 0),
+            "total_to_receive": float(total_with_rewards),
+            "message": "Retirada no prazo - sem penalidade" if is_mature else f"Retirada antecipada - {penalty_percentage:.1f}% de penalidade"
+        }
+    }
+
 @staking_bp.route('/staking/stake', methods=['POST'])
 @token_required
 def create_stake():
@@ -129,14 +196,13 @@ def create_stake():
             start_date = datetime.now(timezone.utc)
             end_date = start_date + timedelta(days=plan_config['duration_days'])
             
-            # Criar stake
-            cursor.execute('''
-                INSERT INTO stakes (user_id, amount, staking_plan, start_date, end_date, status)
-                VALUES (%s, %s, %s, %s, %s, 'active')
-                RETURNING id
-            ''', (user_id, amount, staking_plan, start_date, end_date))
+            # Criar stake com ID único
+            stake_id = f"stake_{user_id}_{int(time.time() * 1000)}"
             
-            stake_id = cursor.fetchone()['id']
+            cursor.execute('''
+                INSERT INTO stakes (id, user_id, amount, staking_plan, start_date, end_date, status, last_reward_claim)
+                VALUES (%s, %s, %s, %s, %s, %s, 'active', %s)
+            ''', (stake_id, user_id, amount, staking_plan, start_date, end_date, start_date))
             
             # Atualizar saldos
             cursor.execute('''
@@ -175,10 +241,101 @@ def create_stake():
         print(f"❌ Erro geral create-stake: {e}")
         return jsonify({"error": str(e)}), 500
 
+@staking_bp.route('/staking/active-stakes', methods=['GET'])
+@token_required
+def get_active_stakes():
+    """Get all active stakes with detailed cards for withdrawal preview"""
+    try:
+        user_id = request.user_id
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Fetch all active stakes
+        cursor.execute('''
+            SELECT id, amount, staking_plan, start_date, end_date, status, 
+                   last_reward_claim, total_rewards_claimed
+            FROM stakes 
+            WHERE user_id = %s AND status = 'active'
+            ORDER BY start_date DESC
+        ''', (user_id,))
+        
+        stakes = cursor.fetchall()
+        conn.close()
+        
+        stakes_cards = []
+        total_staked = 0
+        total_pending_rewards = 0
+        
+        for stake in stakes:
+            stake_dict = dict(stake)
+            plan_config = STAKING_PLANS[stake_dict['staking_plan']]
+            
+            card = build_stake_card(stake_dict, plan_config)
+            stakes_cards.append(card)
+            
+            total_staked += stake_dict['amount']
+            total_pending_rewards += card['current_rewards']
+        
+        return jsonify({
+            "success": True,
+            "stakes": stakes_cards,
+            "summary": {
+                "total_active_stakes": len(stakes_cards),
+                "total_staked": float(total_staked),
+                "total_pending_rewards": float(total_pending_rewards)
+            }
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao buscar stakes ativos: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@staking_bp.route('/staking/withdrawal-preview/<stake_id>', methods=['GET'])
+@token_required
+def get_withdrawal_preview(stake_id):
+    """Get detailed preview of what will be received on withdrawal"""
+    try:
+        user_id = request.user_id
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Fetch the stake
+        cursor.execute('''
+            SELECT id, user_id, amount, staking_plan, start_date, end_date, status, 
+                   last_reward_claim, total_rewards_claimed
+            FROM stakes 
+            WHERE id = %s AND user_id = %s
+        ''', (stake_id, user_id))
+        
+        stake = cursor.fetchone()
+        conn.close()
+        
+        if not stake:
+            return jsonify({"error": "Stake não encontrado"}), 404
+        
+        if stake['status'] != 'active':
+            return jsonify({"error": "Stake não está ativo"}), 400
+        
+        stake_dict = dict(stake)
+        plan_config = STAKING_PLANS[stake_dict['staking_plan']]
+        
+        card = build_stake_card(stake_dict, plan_config)
+        
+        return jsonify({
+            "success": True,
+            "card": card
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Erro ao buscar preview de retirada: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @staking_bp.route('/staking/unstake', methods=['POST'])
 @token_required
 def unstake():
-    """Unstake tokens (early or at maturity)"""
+    """Unstake tokens (early or at maturity) - with detailed withdrawal info"""
     try:
         user_id = request.user_id
         data = request.json
@@ -195,7 +352,7 @@ def unstake():
             
             # Buscar o stake
             cursor.execute('''
-                SELECT id, user_id, amount, staking_plan, start_date, end_date, status, total_rewards_claimed
+                SELECT id, user_id, amount, staking_plan, start_date, end_date, status, total_rewards_claimed, last_reward_claim
                 FROM stakes 
                 WHERE id = %s AND user_id = %s
             ''', (stake_id, user_id))
@@ -246,10 +403,10 @@ def unstake():
             cursor.execute('''
                 UPDATE stakes 
                 SET status = 'completed', 
-                    unstake_date = %s,
-                    final_amount = %s,
+                    withdrawn_at = %s,
+                    actual_return = %s,
                     penalty_applied = %s,
-                    rewards_claimed_at_unstake = %s
+                    total_rewards_claimed = %s
                 WHERE id = %s
             ''', (current_time, final_amount, penalty_amount, rewards_to_claim, stake_id))
             
@@ -282,14 +439,22 @@ def unstake():
             
             conn.commit()
             
+            # Build response with detailed card info
+            card = build_stake_card(stake_dict, plan_config)
+            
             return jsonify({
                 "success": True,
                 "message": f"Unstake realizado! Recebido: {total_to_receive:.2f} ALZ",
-                "amount_received": total_to_receive,
-                "original_amount": stake_dict['amount'],
-                "rewards_claimed": rewards_to_claim,
-                "penalty_applied": penalty_amount,
-                "was_early": is_early
+                "stake_card": card,
+                "withdrawal_details": {
+                    "original_amount": float(stake_dict['amount']),
+                    "amount_received": float(total_to_receive),
+                    "rewards_claimed": float(rewards_to_claim),
+                    "penalty_applied": float(penalty_amount),
+                    "penalty_percentage": (plan_config['early_unstake_penalty'] * 100) if is_early else 0,
+                    "was_early": is_early,
+                    "days_held": round(days_elapsed, 2)
+                }
             }), 200
             
         except Exception as e:
@@ -334,7 +499,7 @@ def claim_staking_rewards():
                 return jsonify({"error": "Stake não encontrado ou não ativo"}), 404
             
             stake_dict = dict(stake)
-            last_claim_date = safe_datetime_aware(stake["last_reward_claim"])  # ✅ CORREÇÃO DA INDENTAÇÃO
+            last_claim_date = safe_datetime_aware(stake["last_reward_claim"])
             
             plan_config = STAKING_PLANS[stake_dict['staking_plan']]
             
@@ -380,9 +545,9 @@ def claim_staking_rewards():
             return jsonify({
                 "success": True,
                 "message": f"Recompensas de {rewards:.2f} ALZ resgatadas com sucesso!",
-                "rewards_claimed": rewards,
-                "days_elapsed": days_elapsed,
-                "total_rewards_claimed": total_rewards
+                "rewards_claimed": float(rewards),
+                "days_elapsed": round(days_elapsed, 2),
+                "total_rewards_claimed": float(total_rewards)
             }), 200
             
         except Exception as e:
@@ -399,7 +564,7 @@ def claim_staking_rewards():
 @staking_bp.route('/staking/me', methods=['GET'])
 @token_required
 def get_my_stakes():
-    """Get user's staking positions"""
+    """Get user's staking positions with detailed cards"""
     try:
         user_id = request.user_id
         
@@ -408,16 +573,18 @@ def get_my_stakes():
         
         cursor.execute('''
             SELECT id, amount, staking_plan, start_date, end_date, status, 
-                   last_reward_claim, total_rewards_claimed, unstake_date,
-                   final_amount, penalty_applied, rewards_claimed_at_unstake
+                   last_reward_claim, total_rewards_claimed, withdrawn_at,
+                   actual_return, penalty_applied
             FROM stakes 
             WHERE user_id = %s
-            ORDER BY created_at DESC
+            ORDER BY start_date DESC
         ''', (user_id,))
         
         stakes = cursor.fetchall()
+        conn.close()
         
-        stakes_list = []
+        active_stakes_cards = []
+        completed_stakes_cards = []
         total_staked = 0
         total_rewards = 0
         total_pending_rewards = 0
@@ -425,53 +592,47 @@ def get_my_stakes():
         for stake in stakes:
             stake_dict = dict(stake)
             
-            # Calcular recompensas pendentes para stakes ativos
-            pending_rewards = 0
             if stake_dict['status'] == 'active':
                 plan_config = STAKING_PLANS[stake_dict['staking_plan']]
-                pending_rewards, days_elapsed = calculate_staking_rewards(
-                    stake_dict['amount'], 
-                    plan_config['apy'],
-                    safe_datetime_aware(stake_dict['start_date']),
-                    safe_datetime_aware(stake_dict['last_reward_claim']) if stake_dict['last_reward_claim'] else None
-                )
-                total_pending_rewards += pending_rewards
+                card = build_stake_card(stake_dict, plan_config)
+                active_stakes_cards.append(card)
+                
                 total_staked += stake_dict['amount']
+                total_pending_rewards += card['current_rewards']
+            else:
+                # For completed stakes, show simpler info
+                plan_config = STAKING_PLANS[stake_dict['staking_plan']]
+                completed_stakes_cards.append({
+                    "stake_id": stake_dict['id'],
+                    "amount": float(stake_dict['amount']),
+                    "staking_plan": stake_dict['staking_plan'],
+                    "plan_name": plan_config['name'],
+                    "start_date": stake_dict['start_date'].isoformat() if stake_dict['start_date'] else None,
+                    "end_date": stake_dict['end_date'].isoformat() if stake_dict['end_date'] else None,
+                    "withdrawn_at": stake_dict['withdrawn_at'].isoformat() if stake_dict['withdrawn_at'] else None,
+                    "actual_return": float(stake_dict['actual_return']) if stake_dict['actual_return'] else None,
+                    "penalty_applied": float(stake_dict['penalty_applied']) if stake_dict['penalty_applied'] else None,
+                    "total_rewards_claimed": float(stake_dict['total_rewards_claimed'] or 0)
+                })
             
             total_rewards += stake_dict['total_rewards_claimed'] or 0
-            
-            stakes_list.append({
-                "id": stake_dict['id'],
-                "amount": float(stake_dict['amount']),
-                "staking_plan": stake_dict['staking_plan'],
-                "plan_name": STAKING_PLANS[stake_dict['staking_plan']]['name'],
-                "start_date": stake_dict['start_date'].isoformat() if stake_dict['start_date'] else None,
-                "end_date": stake_dict['end_date'].isoformat() if stake_dict['end_date'] else None,
-                "status": stake_dict['status'],
-                "last_reward_claim": stake_dict['last_reward_claim'].isoformat() if stake_dict['last_reward_claim'] else None,
-                "total_rewards_claimed": float(stake_dict['total_rewards_claimed'] or 0),
-                "pending_rewards": pending_rewards,
-                "unstake_date": stake_dict['unstake_date'].isoformat() if stake_dict['unstake_date'] else None,
-                "final_amount": float(stake_dict['final_amount']) if stake_dict['final_amount'] else None,
-                "penalty_applied": float(stake_dict['penalty_applied']) if stake_dict['penalty_applied'] else None
-            })
         
         return jsonify({
             "success": True,
-            "stakes": stakes_list,
+            "active_stakes": active_stakes_cards,
+            "completed_stakes": completed_stakes_cards,
             "summary": {
-                "total_staked": total_staked,
-                "total_rewards_claimed": total_rewards,
-                "total_pending_rewards": total_pending_rewards,
-                "active_stakes": len([s for s in stakes_list if s['status'] == 'active'])
+                "total_active_stakes": len(active_stakes_cards),
+                "total_completed_stakes": len(completed_stakes_cards),
+                "total_staked": float(total_staked),
+                "total_rewards_claimed": float(total_rewards),
+                "total_pending_rewards": float(total_pending_rewards)
             }
         }), 200
         
     except Exception as e:
         print(f"❌ Erro ao buscar stakes: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
 
 @staking_bp.route('/staking/options', methods=['GET'])
 def get_staking_options():
@@ -483,9 +644,9 @@ def get_staking_options():
                 "key": plan_key,
                 "name": plan_config['name'],
                 "duration_days": plan_config['duration_days'],
-                "apy": plan_config['apy'],
+                "apy": plan_config['apy'] * 100,  # Convert to percentage
                 "min_amount": plan_config['min_amount'],
-                "early_unstake_penalty": plan_config['early_unstake_penalty']
+                "early_unstake_penalty": plan_config['early_unstake_penalty'] * 100  # Convert to percentage
             })
         
         return jsonify({
@@ -547,59 +708,19 @@ def get_staking_stats():
                 plan_config = STAKING_PLANS[stake['staking_plan']]
                 estimated_annual += stake['amount'] * plan_config['apy']
         
+        conn.close()
+        
         return jsonify({
             "success": True,
             "stats": {
                 "total_staked": float(total_staked),
                 "total_rewards_claimed": float(total_rewards),
                 "active_stakes": active_stakes,
-                "estimated_annual_rewards": estimated_annual,
-                "estimated_monthly_rewards": estimated_annual / 12
+                "estimated_annual_rewards": float(estimated_annual),
+                "estimated_monthly_rewards": float(estimated_annual / 12)
             }
         }), 200
         
     except Exception as e:
         print(f"❌ Erro ao buscar estatísticas: {e}")
         return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-@staking_bp.route('/staking/auto-compound/<stake_id>', methods=['PUT'])
-@token_required
-def toggle_auto_compound(stake_id):
-    """Toggle auto-compound for a stake"""
-    try:
-        user_id = request.user_id
-        data = request.json
-        auto_compound = data.get('auto_compound', False)
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Verificar se o stake pertence ao usuário
-        cursor.execute('''
-            SELECT id FROM stakes WHERE id = %s AND user_id = %s
-        ''', (stake_id, user_id))
-        
-        if not cursor.fetchone():
-            return jsonify({"error": "Stake não encontrado"}), 404
-        
-        # Atualizar auto-compound
-        cursor.execute('''
-            UPDATE stakes SET auto_compound = %s WHERE id = %s
-        ''', (auto_compound, stake_id))
-        
-        conn.commit()
-        
-        return jsonify({
-            "success": True,
-            "message": f"Auto-compound {'ativado' if auto_compound else 'desativado'} com sucesso",
-            "auto_compound": auto_compound
-        }), 200
-        
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Erro ao atualizar auto-compound: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
