@@ -5,6 +5,7 @@ import uuid
 import math
 import json
 from database_neon import get_db_connection
+from safe_datetime_aware import safe_datetime_aware, safe_datetime_diff
 
 staking_bp = Blueprint("staking", __name__)
 
@@ -67,34 +68,7 @@ def calculate_actual_apy(base_apy, token, duration, auto_compound):
         return base_rate
 
 
-def safe_days_remaining(end_date, current_date=None):
-    """✅ CORREÇÃO: Calcular dias restantes de forma segura, garantindo timezone-awareness"""
-    if current_date is None:
-        current_date = datetime.now(timezone.utc) # Agora é timezone-aware
-    
-    try:
-        # 1. Garantir que end_date é timezone-aware (UTC)
-        if end_date is None:
-            return 0 # Se a data final for nula, o stake é considerado expirado ou inválido.
-        if end_date.tzinfo is None or end_date.tzinfo.utcoffset(end_date) is None:
-            end_date = end_date.replace(tzinfo=timezone.utc)
-        else:
-            end_date = end_date.astimezone(timezone.utc)
-            
-        # 2. Subtração direta, pois ambos são aware (UTC)
-        time_diff = end_date - current_date
-        
-        # 3. Lógica de dias restantes
-        if time_diff.total_seconds() <= 0:
-            return 0
-        
-        # Arredonda para cima para garantir que se for menos de 1 dia, ainda conta como 1
-        days = math.ceil(time_diff.total_seconds() / (24 * 3600))
-        return days
-            
-    except Exception as e:
-        print(f"❌ Erro em safe_days_remaining: {e}")
-        return 0
+
 
 @staking_bp.route("/stake", methods=["POST"])
 def stake():
@@ -261,7 +235,8 @@ def unstake():
              return jsonify({"error": "Erro de consistência: Saldo de staking insuficiente para retirada"}), 500
 
         # ✅ USAR FUNÇÃO CORRIGIDA
-        days_remaining = safe_days_remaining(stake["end_date"])
+        time_diff = safe_datetime_diff(stake["end_date"])
+        days_remaining = max(0, math.ceil(time_diff.total_seconds() / (24 * 3600)))
         
         is_early_withdrawal = days_remaining > 0
         penalty_rate = float(stake["early_withdrawal_penalty"]) if is_early_withdrawal else 0.0
@@ -346,20 +321,16 @@ def update_stake_rewards(stake_id):
 
         current_date = datetime.now(timezone.utc)
         
-        last_claim_date = stake["last_reward_claim"]
-
-        # 1. Garantir que last_claim_date é timezone-aware (UTC)
-        if last_claim_date is None:
-            # Se for nulo, assume-se a data de início do stake como último claim
-            last_claim_date = stake["start_date"] 
-        if last_claim_date.tzinfo is None or last_claim_date.tzinfo.utcoffset(last_claim_date) is None:
-            last_claim_date = last_claim_date.replace(tzinfo=timezone.utc)
-        else:
-            last_claim_date = last_claim_date.astimezone(timezone.utc)
-
-        # current_date já é UTC-aware
-        time_since_last_claim = current_date - last_claim_date
-        days_since_last_claim = time_since_last_claim.days
+	        last_claim_date = safe_datetime_aware(stake["last_reward_claim"])
+	
+	        # 1. Usar a função utilitária para garantir que a data de claim é aware
+	        if last_claim_date is None:
+	            # Se for nulo, assume-se a data de início do stake como último claim
+	            last_claim_date = safe_datetime_aware(stake["start_date"]) 
+	        
+	        # Usa a função utilitária para garantir a subtração segura
+	        time_since_last_claim = safe_datetime_diff(current_date, last_claim_date)
+	        days_since_last_claim = time_since_last_claim.days
 
         if days_since_last_claim <= 0:
             return False # Nenhuma atualização necessária
@@ -381,8 +352,9 @@ def update_stake_rewards(stake_id):
 
         new_accrued_reward = float(stake["accrued_reward"]) + new_reward
         
-        # ✅ USAR FUNÇÃO CORRIGIDA
-        days_remaining = safe_days_remaining(stake["end_date"], current_date)
+		        # ✅ USAR FUNÇÃO CORRIGIDA
+		        time_diff_remaining = safe_datetime_diff(stake["end_date"], current_date)
+		        days_remaining = max(0, math.ceil(time_diff_remaining.total_seconds() / (24 * 3600)))
 
         # 4. Atualizar banco de dados
         cursor.execute(
@@ -500,26 +472,19 @@ def get_my_stakes():
         formatted_stakes = []
         for stake in stakes:
             try:
-                # ✅ USAR FUNÇÃO CORRIGIDA para calcular dias restantes
-                days_remaining = safe_days_remaining(stake["end_date"])
+		                # ✅ USAR FUNÇÃO CORRIGIDA para calcular dias restantes
+		                time_diff_remaining = safe_datetime_diff(stake["end_date"])
+		                days_remaining = max(0, math.ceil(time_diff_remaining.total_seconds() / (24 * 3600)))
                 
                 # ✅ GARANTIR que as datas sejam strings ISO formatadas corretamente
                 start_date = stake["start_date"]
                 end_date = stake["end_date"]
                 last_reward_claim = stake["last_reward_claim"]
                 
-	                # Garantir que as datas sejam timezone-aware (UTC) antes de formatar
-	                # Se a data for naive (sem fuso horário), assume-se UTC para evitar o erro
-	                def make_aware(dt):
-	                    if not dt:
-	                        return None
-	                    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
-	                        return dt.replace(tzinfo=timezone.utc)
-	                    return dt
-	
-	                start_date = make_aware(stake["start_date"])
-	                end_date = make_aware(stake["end_date"])
-	                last_reward_claim = make_aware(stake["last_reward_claim"])
+	                # Garante que as datas sejam aware com a função utilitária
+	                start_date = safe_datetime_aware(stake["start_date"])
+	                end_date = safe_datetime_aware(stake["end_date"])
+	                last_reward_claim = safe_datetime_aware(stake["last_reward_claim"])
 	
 	                start_date_iso = start_date.isoformat() if start_date else None
 	                end_date_iso = end_date.isoformat() if end_date else None
