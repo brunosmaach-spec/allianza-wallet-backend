@@ -18,8 +18,21 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()
 
-# ✅ IMPORTAR NOWPAYMENTS SERVICE
-from nowpayments_service import nowpayments_service
+# ✅ IMPORTAR NOWPAYMENTS SERVICE COM FALLBACK
+try:
+    from nowpayments_service import nowpayments_service
+    NOWPAYMENTS_SERVICE_AVAILABLE = True
+    print("✅ NowPayments Service importado com sucesso")
+except ImportError as e:
+    print(f"❌ Erro ao importar NowPayments Service: {e}")
+    # Criar serviço dummy como fallback
+    class NowPaymentsServiceDummy:
+        def create_invoice(self, *args, **kwargs):
+            return {"success": False, "error": "NowPayments Service não disponível"}
+        def get_payment_status(self, *args, **kwargs):
+            return {"error": "NowPayments Service não disponível"}
+    nowpayments_service = NowPaymentsServiceDummy()
+    NOWPAYMENTS_SERVICE_AVAILABLE = False
 
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO COM KEEP-ALIVE")
@@ -61,10 +74,7 @@ print(f"🔑 NOWPAYMENTS CONFIG:")
 print(f"   API Key: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_API_KEY') else '❌ NÃO ENCONTRADO'}")
 print(f"   IPN Secret: {'✅ CONFIGURADO' if NOWPAYMENTS_IPN_SECRET else '❌ NÃO ENCONTRADO'}")
 print(f"   Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
-
-# ✅ VERIFICAR CONFIGURAÇÃO NOWPAYMENTS
-nowpayments_config = nowpayments_service.verify_config()
-print(f"🔧 NowPayments Status: {nowpayments_config}")
+print(f"   Service Status: {'✅ DISPONÍVEL' if NOWPAYMENTS_SERVICE_AVAILABLE else '❌ INDISPONÍVEL'}")
 
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
 print(f"🧾 PAGARME_PIX_URL: ✅ CONFIGURADO")
@@ -626,6 +636,12 @@ def create_nowpayments_invoice():
             conn.close()
 
         # 2. Criar invoice na NowPayments
+        if not NOWPAYMENTS_SERVICE_AVAILABLE:
+            return jsonify({
+                "success": False,
+                "error": "Serviço NowPayments temporariamente indisponível"
+            }), 503
+            
         result = nowpayments_service.create_invoice(email, amount_brl, description)
         
         if result['success']:
@@ -1123,14 +1139,35 @@ def check_nowpayments_config():
 def test_nowpayments_config():
     """Testar configuração completa da NowPayments"""
     try:
-        config_test = nowpayments_service.verify_config()
+        # Testar configuração básica
+        config_status = {
+            "api_key_configured": bool(os.getenv('NOWPAYMENTS_API_KEY')),
+            "ipn_secret_configured": bool(NOWPAYMENTS_IPN_SECRET),
+            "service_available": NOWPAYMENTS_SERVICE_AVAILABLE,
+            "base_url": "https://api.nowpayments.io/v1",
+            "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments"
+        }
+        
+        # Testar API se disponível
+        if NOWPAYMENTS_SERVICE_AVAILABLE and os.getenv('NOWPAYMENTS_API_KEY'):
+            try:
+                # Testar endpoint de status
+                response = requests.get(
+                    "https://api.nowpayments.io/v1/status",
+                    headers={'x-api-key': os.getenv('NOWPAYMENTS_API_KEY')},
+                    timeout=10
+                )
+                config_status["api_status"] = response.status_code
+                if response.status_code == 200:
+                    config_status["api_message"] = response.json().get('message', 'OK')
+                else:
+                    config_status["api_error"] = f"HTTP {response.status_code}"
+            except Exception as e:
+                config_status["api_error"] = str(e)
         
         return jsonify({
             "success": True,
-            "nowpayments_config": config_test,
-            "ipn_secret_configured": bool(NOWPAYMENTS_IPN_SECRET),
-            "webhook_url": f"{os.getenv('VITE_WALLET_BACKEND_URL')}/webhook/nowpayments",
-            "backend_url": os.getenv('VITE_WALLET_BACKEND_URL'),
+            "nowpayments_config": config_status,
             "timestamp": datetime.now().isoformat()
         }), 200
         
