@@ -4,8 +4,7 @@ import json
 from flask import Blueprint, request, jsonify
 from functools import wraps
 import jwt
-from datetime import datetime, timedelta, timezone
-from backend_staking_routes import make_aware, safe_days_remaining, update_stake_rewards
+from datetime import datetime, timedelta
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -73,11 +72,11 @@ def health_check():
         
         conn.close()
         
-	        return jsonify({
-	            "status": "healthy",
-	            "database": "connected",
-	            "timestamp": datetime.now(timezone.utc).isoformat(),
-	            "tables": {
+        return jsonify({
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.utcnow().isoformat(),
+            "tables": {
                 "payments": tables_status['payments_count'],
                 "users": tables_status['users_count'],
                 "balances": tables_status['balances_count']
@@ -167,14 +166,12 @@ def get_all_stakes():
         for stake in stakes:
             formatted_stake = dict(stake)
             
-	            # Converter datas para ISO format, garantindo que sejam timezone-aware
-	            for key in ['start_date', 'end_date', 'last_reward_claim', 'withdrawn_at']:
-	                if formatted_stake[key]:
-	                    aware_dt = make_aware(formatted_stake[key])
-	                    if aware_dt:
-	                        formatted_stake[key] = aware_dt.isoformat()
-	                    else:
-	                        formatted_stake[key] = None
+            # Converter datas para ISO format
+            for key in ['start_date', 'end_date', 'last_reward_claim', 'withdrawn_at']:
+                if formatted_stake[key] and hasattr(formatted_stake[key], 'isoformat'):
+                    formatted_stake[key] = formatted_stake[key].isoformat()
+                elif formatted_stake[key]:
+                    formatted_stake[key] = formatted_stake[key].strftime('%Y-%m-%dT%H:%M:%S.%fZ')
             
             # Garantir que os numéricos sejam floats
             for key in ['amount', 'apy', 'estimated_reward', 'accrued_reward', 'early_withdrawal_penalty', 'actual_return', 'penalty_applied']:
@@ -195,12 +192,17 @@ def get_all_stakes():
     finally:
         conn.close()
 
-# ✅ ROTA PARA UNSTAKE FORÇADO PELO ADMIN	@admin_bp.route("/admin/unstake", methods=["POST"])
-	@admin_required
-	def admin_unstake():
-	    # As funções necessárias já estão importadas no topo do arquivo
-	    data = request.json
-	    stake_id = data.get('stake_id')r_id = data.get('user_id')
+# ✅ ROTA PARA UNSTAKE FORÇADO PELO ADMIN
+@admin_bp.route('/admin/unstake', methods=['POST'])
+@admin_required
+def admin_unstake():
+    # Importações necessárias para a lógica de unstake
+    from datetime import datetime, timezone
+    from backend_staking_routes import safe_days_remaining, update_stake_rewards
+    
+    data = request.json
+    stake_id = data.get('stake_id')
+    user_id = data.get('user_id')
     confirm_early_withdrawal = data.get('confirm_early_withdrawal', False)
     
     if not stake_id or not user_id:
