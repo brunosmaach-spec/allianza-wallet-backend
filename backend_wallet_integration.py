@@ -18,11 +18,16 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()
 
+# ✅ IMPORTAR NOWPAYMENTS SERVICE
+from nowpayments_service import nowpayments_service
+
 print("=" * 60)
 print("🚀 ALLIANZA WALLET BACKEND - PRODUÇÃO COM KEEP-ALIVE")
 print("✅ SISTEMA SEMPRE ATIVO - SEM COLD START")
 print("🎯 KEEP-ALIVE AUTOMÁTICO IMPLEMENTADO")
 print("🔒 COFRE SEGURO IMPLEMENTADO")
+print("✅ NOWPAYMENTS SERVICE INTEGRADO")
+print("🎯 SISTEMA COMPLETO DE CRYPTO PAGAMENTOS")
 print("=" * 60)
 
 # ✅ KEEP-ALIVE AUTOMÁTICO
@@ -52,9 +57,15 @@ keep_alive_service()
 # ✅ CONFIGURAÇÃO NOWPAYMENTS COM FALLBACK
 NOWPAYMENTS_IPN_SECRET = os.getenv('NOWPAYMENTS_IPN_SECRET', 'rB4Ic28l8posIjXA4fx90GuGnHagAxEj')
 
-print(f"🔑 NOWPAYMENTS_IPN_SECRET: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_IPN_SECRET') else '⚠️ USANDO FALLBACK'}")
-print(f"📏 Comprimento: {len(NOWPAYMENTS_IPN_SECRET)} caracteres")
-print(f"🔗 Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments" )
+print(f"🔑 NOWPAYMENTS CONFIG:")
+print(f"   API Key: {'✅ CONFIGURADO' if os.getenv('NOWPAYMENTS_API_KEY') else '❌ NÃO ENCONTRADO'}")
+print(f"   IPN Secret: {'✅ CONFIGURADO' if NOWPAYMENTS_IPN_SECRET else '❌ NÃO ENCONTRADO'}")
+print(f"   Webhook URL: https://allianza-wallet-backend.onrender.com/webhook/nowpayments")
+
+# ✅ VERIFICAR CONFIGURAÇÃO NOWPAYMENTS
+nowpayments_config = nowpayments_service.verify_config()
+print(f"🔧 NowPayments Status: {nowpayments_config}")
+
 print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
 print(f"🧾 PAGARME_PIX_URL: ✅ CONFIGURADO")
 print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
@@ -182,6 +193,7 @@ CORS(app, resources={
 @app.route('/webhook/nowpayments', methods=['OPTIONS'])
 @app.route('/api/nowpayments/check-config', methods=['OPTIONS'])
 @app.route('/api/nowpayments/test-webhook', methods=['OPTIONS'])
+@app.route('/api/nowpayments/test-config', methods=['OPTIONS'])
 @app.route('/api/vault/balance', methods=['OPTIONS'])
 @app.route('/api/vault/transfer', methods=['OPTIONS'])
 @app.route('/api/vault/initialize', methods=['OPTIONS'])
@@ -526,36 +538,42 @@ def create_checkout_session():
         print(f"❌ Erro ao criar sessão Stripe: {e}")
         return jsonify({'error': str(e)}), 500
 
-# 💰 ROTA PARA CRIAR FATURA NOWPAYMENTS
+# 💰 ROTA PARA CRIAR FATURA NOWPAYMENTS (ATUALIZADA)
 @app.route('/api/nowpayments/create-invoice', methods=['POST'])
 def create_nowpayments_invoice():
-    """Cria uma fatura no NowPayments e retorna a URL de pagamento."""
+    """Cria uma fatura no NowPayments usando o serviço dedicado"""
     try:
         data = request.json
         amount_brl = data.get('amount_brl')
         email = data.get('email')
+        description = data.get('description', f'Compra de ALZ - {email}')
         
         if not amount_brl or not email:
             return jsonify({"error": "Valor (BRL) e email são obrigatórios"}), 400
             
-        # 1. Calcular o valor em ALZ
-        amount_brl = float(amount_brl)
-        amount_alz = amount_brl / 0.10  # 1 ALZ = R$ 0.10
-        
-        # 2. Registrar pagamento pendente no DB
+        # Validar valor
+        try:
+            amount_brl = float(amount_brl)
+            if amount_brl < 5.50:
+                return jsonify({"error": "Valor mínimo: R$ 5,50"}), 400
+        except ValueError:
+            return jsonify({"error": "Valor inválido"}), 400
+
+        print(f"🔄 Criando invoice NowPayments para {email} - R$ {amount_brl}")
+
+        # 1. Registrar pagamento pendente no DB primeiro
         conn = get_db_connection()
         cursor = conn.cursor()
         
         try:
             cursor.execute("BEGIN")
             
-            # Buscar ou criar usuário (lógica copiada de /api/site/purchase)
+            # Buscar ou criar usuário
             cursor.execute("SELECT id, wallet_address, password FROM users WHERE email = %s", (email,))
             user = cursor.fetchone()
             
-            user_created = False
-            wallet_address = None
             user_id = None
+            wallet_address = None
             
             if not user:
                 private_key, wallet_address = generate_polygon_wallet()
@@ -568,13 +586,12 @@ def create_nowpayments_invoice():
                     (email, hashed_password, nickname, wallet_address, private_key)
                 )
                 user_id = cursor.fetchone()['id']
-                user_created = True
-                print(f"👤 Usuário criado com senha temporária para NowPayments: {email}")
+                print(f"👤 Usuário criado: {email}")
             else:
                 user_id = user['id']
                 wallet_address = user['wallet_address']
-                print(f"👤 Usuário existente para NowPayments: {email} - ID: {user_id}")
-            
+                print(f"👤 Usuário existente: {email}")
+
             # Verificar/criar saldo
             cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
             if not cursor.fetchone():
@@ -582,107 +599,73 @@ def create_nowpayments_invoice():
                     "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
                     (user_id, 0.0)
                 )
-                print(f"💰 Saldo criado para usuário {user_id}")
-                
-            # Metadata para o NowPayments
-            metadata = {
-                'alz_amount': amount_alz,
-                'amount_brl': amount_brl,
-                'email': email
-            }
+                print(f"💰 Saldo criado para user {user_id}")
+
+            # Calcular ALZ
+            amount_alz = amount_brl / 0.10
             
-            # Registrar o pagamento pendente
+            # Registrar pagamento pendente
             cursor.execute(
                 "INSERT INTO payments (email, amount, method, status, user_id, metadata) VALUES (%s, %s, %s, 'pending', %s, %s) RETURNING id",
-                (email, amount_brl, 'crypto', user_id, json.dumps(metadata))
+                (email, amount_brl, 'crypto', user_id, json.dumps({
+                    'alz_amount': amount_alz,
+                    'nowpayments_pending': True,
+                    'user_created': user_id is not None
+                }))
             )
             db_payment_id = cursor.fetchone()['id']
             
             conn.commit()
-            
+            print(f"✅ Pagamento registrado no DB: ID {db_payment_id}")
+
         except Exception as e:
             conn.rollback()
-            print(f"❌ Erro ao registrar pagamento NowPayments no DB: {e}")
+            print(f"❌ Erro ao registrar pagamento no DB: {e}")
             return jsonify({"error": "Erro interno ao registrar pagamento"}), 500
         finally:
             conn.close()
 
-        # 3. Chamar a API NowPayments
-        NOWPAYMENTS_API_KEY = os.getenv('NOWPAYMENTS_API_KEY')
-        if not NOWPAYMENTS_API_KEY:
-            return jsonify({"error": "Chave API NowPayments não configurada no servidor"}), 500
-
-        headers = {
-            'x-api-key': NOWPAYMENTS_API_KEY,
-            'Content-Type': 'application/json'
-        }
+        # 2. Criar invoice na NowPayments
+        result = nowpayments_service.create_invoice(email, amount_brl, description)
         
-        # NowPayments espera o valor em USD. Vamos usar uma taxa de câmbio fixa ou buscar uma real.
-        # Para simplificar, vamos assumir que o valor em BRL é o valor em USD para a fatura.
-        # Em um ambiente real, seria necessário uma conversão de BRL para USD.
-        # Usaremos o valor em BRL como o valor base para a fatura.
-        
-        # Usando o valor em BRL como base para a fatura (assumindo 1 BRL = 1 USD para o propósito da API)
-        # O ideal seria usar uma API de cotação real.
-        amount_in_usd = amount_brl
-        
-        # O campo order_id será o ID do pagamento no nosso DB
-        payload = {
-            "price_amount": amount_in_usd,
-            "price_currency": "usd", # NowPayments baseia-se em USD
-            "pay_currency": "usdttrc20", # Moeda que o cliente irá pagar (ex: USDT na rede TRC20)
-            "ipn_callback_url": request.url_root + 'webhook/nowpayments',
-            "order_id": str(db_payment_id), # ID do pagamento no nosso DB
-            "order_description": f"Compra de {amount_alz:.2f} ALZ por {email}",
-            "success_url": request.url_root + 'success?payment_id=' + str(db_payment_id),
-            "cancel_url": request.url_root + 'cancel?payment_id=' + str(db_payment_id),
-            "is_fee_paid_by_user": True
-        }
-        
-        NOWPAYMENTS_URL = 'https://api.nowpayments.io/v1/invoice'
-        
-        print(f"Chamando NowPayments API: {NOWPAYMENTS_URL} com payload: {payload}")
-
-        response = requests.post(NOWPAYMENTS_URL, headers=headers, json=payload, timeout=20)
-        response.raise_for_status()
-        
-        invoice_data = response.json()
-        payment_url = invoice_data.get('invoice_url')
-        invoice_id = invoice_data.get('id')
-        
-        if payment_url:
-            # 4. Atualizar o registro de pagamento com o ID da fatura NowPayments
+        if result['success']:
+            # 3. Atualizar pagamento com ID da NowPayments
             conn = get_db_connection()
             cursor = conn.cursor()
             try:
                 cursor.execute(
-                    "UPDATE payments SET tx_hash = %s, metadata = jsonb_set(metadata, '{nowpayments_invoice_id}', %s::jsonb) WHERE id = %s",
-                    (invoice_id, json.dumps(invoice_id), db_payment_id)
+                    "UPDATE payments SET tx_hash = %s, metadata = metadata || %s WHERE id = %s",
+                    (result['invoice_id'], json.dumps({
+                        'nowpayments_invoice_id': result['invoice_id'],
+                        'nowpayments_order_id': result['order_id'],
+                        'nowpayments_amount_usd': result['amount_usd']
+                    }), db_payment_id)
                 )
                 conn.commit()
+                print(f"✅ Pagamento atualizado com NowPayments ID: {result['invoice_id']}")
             except Exception as e:
-                print(f"⚠️ Aviso: Não foi possível atualizar o ID da fatura NowPayments no DB: {e}")
+                print(f"⚠️ Aviso: Não foi possível atualizar NowPayments ID: {e}")
             finally:
                 conn.close()
                 
-            print(f"✅ Fatura NowPayments criada. URL: {payment_url}")
             return jsonify({
                 "success": True,
-                "payment_url": payment_url,
-                "invoice_id": invoice_id,
+                "payment_url": result['payment_url'],
+                "invoice_id": result['invoice_id'],
                 "db_payment_id": db_payment_id,
-                "calculated_alz": amount_alz
+                "amount_alz": amount_alz,
+                "amount_brl": amount_brl,
+                "email": email
             }), 200
         else:
-            print(f"❌ NowPayments não retornou URL de pagamento. Resposta: {invoice_data}")
-            return jsonify({"error": "NowPayments não retornou URL de pagamento"}), 500
+            return jsonify({
+                "success": False,
+                "error": result['error']
+            }), 500
 
-    except requests.exceptions.RequestException as req_err:
-        print(f"❌ Erro de requisição NowPayments: {req_err}")
-        return jsonify({"error": f"Erro de comunicação com NowPayments: {req_err}"}), 500
     except Exception as e:
         print(f"❌ Erro ao criar fatura NowPayments: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"Erro interno: {str(e)}"}), 500
 
 # ✅ ROTA PARA CRIAÇÃO DE PAGAMENTO CRYPTO (CORREÇÃO DO FRONTEND)
 @app.route('/api/crypto/create-payment', methods=['POST', 'OPTIONS'])
@@ -707,35 +690,85 @@ def create_crypto_payment():
         print(f"❌ Erro em create_crypto_payment: {e}")
         return jsonify({"error": str(e)}), 500
 
-# ✅ ROTA PARA VERIFICAR STATUS DO PAGAMENTO CRYPTO
-@app.route('/api/crypto/payment-status/<invoice_id>', methods=['GET'])
-def get_crypto_payment_status(invoice_id):
-    """Verificar status do pagamento crypto"""
+# ✅ ROTA PARA STATUS DE PAGAMENTO (MELHORADA)
+@app.route('/api/crypto/payment-status/<payment_id>', methods=['GET'])
+def get_crypto_payment_status(payment_id):
+    """Obter status detalhado de um pagamento crypto"""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # Buscar no banco
         cursor.execute('''
-            SELECT p.status, p.metadata, p.email, p.amount
+            SELECT p.id, p.status, p.metadata, p.email, p.amount, p.tx_hash,
+                   p.created_at, p.processed_at, p.method,
+                   u.wallet_address, u.nickname
             FROM payments p 
-            WHERE p.tx_hash = %s OR p.id::text = %s
-        ''', (invoice_id, invoice_id))
+            LEFT JOIN users u ON p.user_id = u.id
+            WHERE p.id = %s OR p.tx_hash = %s
+        ''', (payment_id, payment_id))
         
         payment = cursor.fetchone()
         
         if not payment:
             return jsonify({"error": "Pagamento não encontrado"}), 404
-            
-        return jsonify({
+        
+        payment_data = dict(payment)
+        
+        # Status atual
+        current_status = payment_data['status']
+        nowpayments_status = None
+        
+        # Se tiver tx_hash (NowPayments ID) e estiver pendente, buscar status atual
+        if payment_data['tx_hash'] and payment_data['status'] in ['pending', 'processing']:
+            try:
+                nowpayments_status = nowpayments_service.get_payment_status(payment_data['tx_hash'])
+                if 'payment_status' in nowpayments_status:
+                    nowpayments_status_value = nowpayments_status['payment_status']
+                    # Mapear status da NowPayments para nosso sistema
+                    status_mapping = {
+                        'finished': 'completed',
+                        'confirmed': 'completed', 
+                        'sending': 'processing',
+                        'partially_paid': 'processing',
+                        'fully_paid': 'processing'
+                    }
+                    if nowpayments_status_value in status_mapping:
+                        current_status = status_mapping[nowpayments_status_value]
+            except Exception as e:
+                print(f"⚠️ Erro ao buscar status NowPayments: {e}")
+        
+        # Calcular ALZ
+        amount_brl = float(payment_data['amount'])
+        amount_alz = amount_brl / 0.10
+        if payment_data['metadata'] and payment_data['metadata'].get('alz_amount'):
+            amount_alz = float(payment_data['metadata']['alz_amount'])
+        
+        response_data = {
             "success": True,
-            "payment_status": payment['status'],
-            "email": payment['email'],
-            "amount": float(payment['amount']),
-            "metadata": payment['metadata']
-        }), 200
+            "payment_id": payment_data['id'],
+            "status": current_status,
+            "email": payment_data['email'],
+            "amount_brl": amount_brl,
+            "amount_alz": amount_alz,
+            "method": payment_data['method'],
+            "nowpayments_id": payment_data['tx_hash'],
+            "nowpayments_status": nowpayments_status,
+            "created_at": payment_data['created_at'].isoformat() if hasattr(payment_data['created_at'], 'isoformat') else str(payment_data['created_at']),
+            "user": {
+                "wallet_address": payment_data['wallet_address'],
+                "nickname": payment_data['nickname']
+            } if payment_data['wallet_address'] else None
+        }
+        
+        # Adicionar processed_at se existir
+        if payment_data['processed_at']:
+            response_data["processed_at"] = payment_data['processed_at'].isoformat() if hasattr(payment_data['processed_at'], 'isoformat') else str(payment_data['processed_at'])
+        
+        return jsonify(response_data), 200
         
     except Exception as e:
-        print(f"❌ Erro ao verificar status: {e}")
+        print(f'❌ Erro ao buscar status: {e}')
         return jsonify({"error": str(e)}), 500
     finally:
         if 'conn' in locals():
@@ -928,160 +961,150 @@ def extract_email_from_string(text):
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', str(text))
     return email_match.group() if email_match else None
 
-# ✅ WEBHOOK NOWPAYMENTS CORRIGIDO - URL COMPLETA
+# ✅ WEBHOOK NOWPAYMENTS (ATUALIZADO)
 @app.route('/webhook/nowpayments', methods=['POST', 'GET'])
 def nowpayments_webhook():
-    """Webhook NowPayments - COM VALORES CORRETOS"""
+    """Webhook NowPayments - PROCESSAMENTO COMPLETO"""
     try:
         print("=" * 70)
-        print("🎯 NOWPAYMENTS WEBHOOK CHAMADO - VALORES CORRETOS")
+        print("🎯 NOWPAYMENTS WEBHOOK RECEBIDO")
         print("=" * 70)
         
-        # Se for GET, retorna status (para teste)
+        # Se for GET, retorna status
         if request.method == 'GET':
             return jsonify({
                 "status": "active", 
-                "message": "NowPayments webhook está operacional",
-                "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
-                "method": "POST",
-                "ipn_secret_length": len(NOWPAYMENTS_IPN_SECRET),
+                "message": "NowPayments webhook operacional",
                 "timestamp": datetime.now().isoformat()
             }), 200
         
-        # ✅ CORREÇÃO: Obter payload como BYTES
+        # Obter payload
         payload_bytes = request.get_data()
         received_signature = request.headers.get('x-nowpayments-ipn-signature')
         
-        print(f"📍 URL Recebida: {request.url}")
         print(f"📧 Host: {request.headers.get('Host')}")
         print(f"🔑 Assinatura: {received_signature}")
-        print(f"📦 Tamanho do payload: {len(payload_bytes)} bytes")
-        print(f"🔐 IPN Secret length: {len(NOWPAYMENTS_IPN_SECRET)}")
+        print(f"📦 Tamanho payload: {len(payload_bytes)} bytes")
         
-        # ✅ CORREÇÃO: Verificar assinatura com bytes
+        # Verificar assinatura
         if not verify_nowpayments_signature(payload_bytes, received_signature):
             print("❌ Assinatura inválida!")
-            return jsonify({'error': 'Invalid signature', 'received_signature': received_signature}), 401
+            return jsonify({'error': 'Invalid signature'}), 401
         
-        print("✅ Assinatura válida! Processando payload...")
+        print("✅ Assinatura válida!")
         
-        # ✅ CORREÇÃO: Parse JSON
+        # Parse JSON
         try:
             data = json.loads(payload_bytes.decode('utf-8'))
+            print(f"📄 Payload: {json.dumps(data, indent=2)}")
         except json.JSONDecodeError as e:
             print(f"❌ JSON inválido: {e}")
-            print(f"📄 Payload raw: {payload_bytes.decode('utf-8', errors='ignore')}")
             return jsonify({'error': 'Invalid JSON'}), 400
         
-        # ✅ CORREÇÃO: Extrair dados estruturados
-        payment_data = extract_nowpayments_data(data)
-        if not payment_data:
-            return jsonify({'error': 'Invalid payload structure'}), 400
+        # Extrair dados
+        payment_status = data.get('payment_status')
+        payment_id = data.get('payment_id') or data.get('invoice_id')
+        order_id = data.get('order_id')
+        actually_paid = float(data.get('actually_paid', 0))
+        pay_amount = float(data.get('pay_amount', 0))
         
-        payment_status = payment_data['payment_status']
-        email = payment_data['email']
-        amount = payment_data['amount'] # Este é o valor em cripto (ex: BTC, USDT)
-        payment_id = payment_data['payment_id']
+        print(f"📊 Status: {payment_status}")
+        print(f"🎫 Payment ID: {payment_id}")
+        print(f"📋 Order ID: {order_id}")
+        print(f"💰 Actually Paid: {actually_paid}")
+        print(f"💵 Pay Amount: {pay_amount}")
         
-        print(f"📊 Status do pagamento: {payment_status}")
-        print(f"📧 Email identificado: {email}")
-        print(f"💰 Valor: {amount} ({payment_data['currency']})")
-        
+        # Buscar pagamento no banco
         conn = get_db_connection()
         cursor = conn.cursor()
         
         try:
-            # 1. Buscar o registro de pagamento inicial
-            cursor.execute("SELECT id, amount, metadata FROM payments WHERE id = %s", (payment_id,))
+            # Tentar encontrar pelo order_id ou payment_id
+            if order_id:
+                cursor.execute("SELECT id, email, amount, metadata, user_id FROM payments WHERE metadata->>'nowpayments_order_id' = %s", (order_id,))
+            else:
+                cursor.execute("SELECT id, email, amount, metadata, user_id FROM payments WHERE tx_hash = %s", (payment_id,))
+            
             db_payment = cursor.fetchone()
             
             if not db_payment:
-                # Tenta buscar pelo tx_hash (caso seja o segundo webhook)
-                cursor.execute("SELECT id, amount, metadata FROM payments WHERE tx_hash = %s", (payment_id,))
-                db_payment = cursor.fetchone()
-                
-            if not db_payment:
-                print(f"⚠️ Pagamento ID {payment_id} não encontrado no DB. Ignorando.")
+                print(f"❌ Pagamento não encontrado - Order: {order_id}, Payment: {payment_id}")
                 return 'Payment not found', 200
                 
             db_payment_id = db_payment['id']
+            db_email = db_payment['email']
+            db_amount = float(db_payment['amount'])
             db_metadata = db_payment['metadata']
+            user_id = db_payment['user_id']
             
-            # 2. Processar status
-            if payment_status in ['finished', 'sending', 'partially_paid', 'fully_paid', 'confirmed']:
-                # Statuses que indicam pagamento bem-sucedido ou em progresso
+            print(f"✅ Pagamento encontrado: ID {db_payment_id}, Email: {db_email}")
+            
+            # Status atual no banco
+            cursor.execute("SELECT status FROM payments WHERE id = %s", (db_payment_id,))
+            current_status = cursor.fetchone()['status']
+            
+            if current_status == 'completed':
+                print(f"✅ Pagamento {db_payment_id} já está COMPLETED")
+                return 'Already completed', 200
+            
+            # Processar baseado no status
+            if payment_status in ['finished', 'confirmed']:
+                # PAGAMENTO CONFIRMADO - CREDITAR TOKENS
+                print(f"🎉 Pagamento confirmado! Creditando tokens...")
                 
-                # Verifica se já foi processado
-                cursor.execute("SELECT status FROM payments WHERE id = %s", (db_payment_id,))
-                current_status = cursor.fetchone()['status']
+                # Calcular ALZ
+                alz_amount = db_amount / 0.10
+                if db_metadata and db_metadata.get('alz_amount'):
+                    alz_amount = float(db_metadata['alz_amount'])
                 
-                if current_status == 'completed':
-                    print(f"✅ Pagamento ID {db_payment_id} já está COMPLETED. Ignorando evento.")
-                    return 'Already completed', 200
+                # Processar pagamento automático
+                result = process_automatic_payment(db_email, alz_amount, 'crypto', payment_id)
                 
-                # Se o status for 'finished' ou 'fully_paid', processa o crédito de ALZ
-                if payment_status in ['finished', 'fully_paid', 'confirmed']:
-                    
-                    # ✅ CORREÇÃO: Usar o valor em ALZ que foi salvo no metadata
-                    alz_amount_to_credit = db_metadata.get('alz_amount')
-                    
-                    if not alz_amount_to_credit:
-                        print(f"❌ Metadata 'alz_amount' não encontrado para ID {db_payment_id}. Não é possível creditar.")
-                        return 'Missing ALZ amount', 400
-                        
-                    alz_amount_to_credit = float(alz_amount_to_credit)
-                    
-                    # 3. Processar pagamento automático (creditar ALZ)
-                    result = process_automatic_payment(email, alz_amount_to_credit, 'crypto', payment_id)
-                    
-                    if result['success']:
-                        # 4. Atualizar status do pagamento para 'completed'
-                        cursor.execute(
-                            "UPDATE payments SET status = 'completed', tx_hash = %s, processed_at = %s WHERE id = %s",
-                            (payment_id, datetime.utcnow(), db_payment_id)
-                        )
-                        conn.commit()
-                        print(f"🎉 Pagamento ID {db_payment_id} COMPLETED. {alz_amount_to_credit} ALZ creditados.")
-                        return 'Payment completed and tokens credited', 200
-                    else:
-                        # Falha ao creditar tokens (erro de DB)
-                        print(f"❌ Falha ao creditar tokens para ID {db_payment_id}: {result['error']}")
-                        return 'Token credit failure', 500
-                        
-                else:
-                    # Outros status de progresso (sending, partially_paid)
+                if result['success']:
                     cursor.execute(
-                        "UPDATE payments SET status = %s, tx_hash = %s WHERE id = %s",
-                        (payment_status, payment_id, db_payment_id)
+                        "UPDATE payments SET status = 'completed', processed_at = %s WHERE id = %s",
+                        (datetime.utcnow(), db_payment_id)
                     )
                     conn.commit()
-                    print(f"🔄 Pagamento ID {db_payment_id} atualizado para status: {payment_status}")
-                    return 'Status updated', 200
+                    print(f"✅ Tokens creditados! {alz_amount} ALZ para {db_email}")
+                    return 'Payment completed and tokens credited', 200
+                else:
+                    print(f"❌ Falha ao creditar tokens: {result['error']}")
+                    return 'Token credit failure', 500
                     
-            elif payment_status in ['failed', 'expired', 'refunded']:
-                # Statuses de falha
+            elif payment_status in ['sending', 'partially_paid', 'fully_paid']:
+                # PAGAMENTO EM ANDAMENTO
                 cursor.execute(
-                    "UPDATE payments SET status = %s, tx_hash = %s WHERE id = %s",
-                    (payment_status, payment_id, db_payment_id)
+                    "UPDATE payments SET status = 'processing' WHERE id = %s",
+                    (db_payment_id,)
                 )
                 conn.commit()
-                print(f"🔴 Pagamento ID {db_payment_id} falhou/expirou. Status: {payment_status}")
+                print(f"🔄 Pagamento em andamento: {payment_status}")
+                return 'Payment processing', 200
+                
+            elif payment_status in ['failed', 'expired', 'refunded']:
+                # PAGAMENTO FALHOU
+                cursor.execute(
+                    "UPDATE payments SET status = %s WHERE id = %s",
+                    (payment_status, db_payment_id)
+                )
+                conn.commit()
+                print(f"🔴 Pagamento falhou: {payment_status}")
                 return 'Payment failed', 200
-            
+                
             else:
-                # Status desconhecido
-                print(f"❓ Status desconhecido: {payment_status}. Ignorando.")
+                print(f"❓ Status desconhecido: {payment_status}")
                 return 'Unknown status', 200
 
         except Exception as e:
             conn.rollback()
-            print(f"❌ Erro fatal no NowPayments Webhook: {e}")
+            print(f"❌ Erro no webhook: {e}")
             return 'Internal Server Error', 500
         finally:
             conn.close()
 
     except Exception as e:
-        print(f"❌ Erro geral no NowPayments Webhook: {e}")
+        print(f"❌ Erro geral no webhook: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ✅ ROTA PARA CHECAR CONFIGURAÇÃO NOWPAYMENTS
@@ -1094,6 +1117,28 @@ def check_nowpayments_config():
         "webhook_url": "https://allianza-wallet-backend.onrender.com/webhook/nowpayments",
         "status": "OK" if NOWPAYMENTS_IPN_SECRET else "MISSING_SECRET"
     } ), 200
+
+# ✅ ROTA PARA TESTAR CONFIGURAÇÃO NOWPAYMENTS
+@app.route('/api/nowpayments/test-config', methods=['GET'])
+def test_nowpayments_config():
+    """Testar configuração completa da NowPayments"""
+    try:
+        config_test = nowpayments_service.verify_config()
+        
+        return jsonify({
+            "success": True,
+            "nowpayments_config": config_test,
+            "ipn_secret_configured": bool(NOWPAYMENTS_IPN_SECRET),
+            "webhook_url": f"{os.getenv('VITE_WALLET_BACKEND_URL')}/webhook/nowpayments",
+            "backend_url": os.getenv('VITE_WALLET_BACKEND_URL'),
+            "timestamp": datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
 # ✅ ROTA PARA TESTAR WEBHOOK NOWPAYMENTS (SIMULAÇÃO)
 @app.route('/api/nowpayments/test-webhook', methods=['POST'])
@@ -1968,6 +2013,7 @@ def authenticate_request():
         "/debug/stripe",
         "/api/nowpayments/check-config",
         "/api/nowpayments/test-webhook",
+        "/api/nowpayments/test-config",
         "/api/vault/balance",
         "/api/vault/transfer", 
         "/api/vault/initialize",
@@ -2380,6 +2426,7 @@ if __name__ == '__main__':
     print("   - GET  /debug/stripe")
     print("🔗 NowPayments (PÚBLICAS):")
     print("   - GET  /api/nowpayments/check-config")
+    print("   - GET  /api/nowpayments/test-config")
     print("   - POST /api/nowpayments/test-webhook")
     print("   - POST /webhook/nowpayments")
     print("🔗 Cofre Seguro (PÚBLICAS):")
