@@ -50,20 +50,29 @@ def keep_alive_service():
 # Iniciar keep-alive quando o módulo carregar
 keep_alive_service()
 
-# ✅ IMPORTAR SERVIÇO DE PAGAMENTO DIRETO
+# ✅ IMPORTAR SERVIÇO DE PAGAMENTO DIRETO - CORREÇÃO
+DIRECT_CRYPTO_AVAILABLE = False
+direct_crypto_service = None
+
 try:
-    from direct_crypto_service import direct_crypto_service
-    DIRECT_CRYPTO_AVAILABLE = True
-    print("✅ Direct Crypto Payment Service importado com sucesso")
-except ImportError as e:
-    print(f"❌ Erro ao importar Direct Crypto Service: {e}")
+    # Tenta importar de várias formas possíveis
+    try:
+        from direct_crypto_service import direct_crypto_service
+        DIRECT_CRYPTO_AVAILABLE = True
+        print("✅ Direct Crypto Payment Service importado com sucesso!")
+    except ImportError as e:
+        print(f"❌ Erro na importação padrão: {e}")
+        # Tenta importação alternativa
+        import direct_crypto_service
+        direct_crypto_service = direct_crypto_service.direct_crypto_service
+        DIRECT_CRYPTO_AVAILABLE = True
+        print("✅ Direct Crypto Service importado via método alternativo!")
+        
+except Exception as e:
+    print(f"❌ Erro crítico ao importar Direct Crypto Service: {e}")
     DIRECT_CRYPTO_AVAILABLE = False
 
-print(f"💳 STRIPE_SECRET_KEY: {'✅ PRODUÇÃO' if os.getenv('STRIPE_SECRET_KEY', '').startswith('sk_live_') else '❌ NÃO ENCONTRADO'}")
-print(f"🧾 PAGARME_PIX_URL: ✅ CONFIGURADO")
-print(f"🗄️  NEON_DATABASE_URL: {'✅ CONFIGURADO' if os.getenv('NEON_DATABASE_URL') else '❌ NÃO ENCONTRADO'}")
 print(f"🎯 DIRECT_CRYPTO_AVAILABLE: {'✅ SIM' if DIRECT_CRYPTO_AVAILABLE else '❌ NÃO'}")
-print("=" * 60)
 
 # ✅ INSTALAÇÃO FORÇADA DO STRIPE
 import sys
@@ -362,6 +371,56 @@ def token_required(f):
         request.user_id = user_id
         return f(*args, **kwargs)
     return decorated_function
+
+# 🔄 FUNÇÃO authenticate_request - CORRIGIDA PARA ROTAS PÚBLICAS
+@app.before_request
+def authenticate_request():
+    # ✅ LISTA ATUALIZADA DE ROTAS PÚBLICAS
+    public_routes = [
+        "/health", 
+        "/system/info",
+        "/webhook/stripe", 
+        "/register", 
+        "/login", 
+        "/first-time-setup", 
+        "/check-user",
+        "/api/site/purchase",
+        "/create-checkout-session",
+        "/create-pagarme-pix",
+        "/admin/login",
+        "/debug/stripe"
+    ]
+    
+    # ✅ ROTAS PÚBLICAS POR PREFIXO
+    public_prefixes = [
+        "/api/direct-crypto/",
+        "/api/vault/"
+    ]
+    
+    # Exclui rotas de admin e OPTIONS
+    if request.path.startswith("/api/site/admin") or request.method == "OPTIONS":
+        return
+        
+    # ✅ Verificar se é rota pública por caminho exato
+    if request.path in public_routes:
+        return
+        
+    # ✅ Verificar se é rota pública por prefixo
+    if any(request.path.startswith(prefix) for prefix in public_prefixes):
+        return
+
+    # Rotas protegidas (requerem token)
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Authorization token is missing or invalid"}), 401
+
+    token = auth_header.split(" ")[1]
+    user_id = get_user_id_from_token(token)
+
+    if not user_id:
+        return jsonify({"error": "Invalid authentication token"}), 401
+    
+    request.user_id = user_id
 
 # 🛒 ROTA DE COMPRA (USADA PELO FRONTEND) - CORREÇÃO CRÍTICA
 @app.route('/api/site/purchase', methods=['POST'])
@@ -1360,53 +1419,6 @@ def get_user_id_from_token(token):
         pass
     return None
 
-# 🔒 Middleware de Autenticação (aplicado globalmente, exceto para rotas públicas)
-@app.before_request
-def authenticate_request():
-    public_routes = [
-        "/health", 
-        "/system/info",
-        "/webhook/stripe", 
-        "/register", 
-        "/login", 
-        "/first-time-setup", 
-        "/check-user",
-        "/api/site/purchase",
-        "/create-checkout-session",
-        "/create-pagarme-pix",
-        "/admin/login",
-        "/debug/stripe",
-        "/api/direct-crypto/create-payment",
-        "/api/direct-crypto/payment-status",
-        "/api/direct-crypto/supported-currencies",
-        "/api/vault/balance",
-        "/api/vault/transfer", 
-        "/api/vault/initialize",
-        "/api/vault/security/settings",
-        "/api/vault/stats"
-    ]
-    
-    # Exclui rotas de admin e OPTIONS
-    if request.path.startswith("/api/site/admin") or request.method == "OPTIONS":
-        return
-        
-    # Rotas públicas
-    if request.path in public_routes:
-        return
-
-    # Rotas protegidas (requerem token)
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return jsonify({"error": "Authorization token is missing or invalid"}), 401
-
-    token = auth_header.split(" ")[1]
-    user_id = get_user_id_from_token(token)
-
-    if not user_id:
-        return jsonify({"error": "Invalid authentication token"}), 401
-    
-    request.user_id = user_id
-    
 # 👤 ROTA DE REGISTRO
 @app.route("/register", methods=["POST"])
 def register_user():
