@@ -2,6 +2,7 @@
 import os
 import json
 from flask import Blueprint, request, jsonify
+from flask_cors import CORS
 from functools import wraps
 import jwt
 from datetime import datetime, timedelta
@@ -9,6 +10,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 admin_bp = Blueprint('admin', __name__)
+CORS(admin_bp, resources={r"/admin/*": {"origins": "*"}})
 
 # ✅ CONFIGURAÇÃO ÚNICA - Evitar conflitos
 def get_db_connection():
@@ -589,6 +591,7 @@ def manual_token_send():
 
 # ✅ DEBUG CORRIGIDO
 @admin_bp.route('/admin/debug-token', methods=['GET'])
+@admin_required
 def debug_token():
     token = request.headers.get('Authorization', '').replace('Bearer ', '')
     
