@@ -1,11 +1,14 @@
 import sqlite3
-
+from datetime import datetime, timezone
 import os
+
 DATABASE_NAME = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'allianza_wallet.db')
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_NAME)
-    conn.row_factory = sqlite3.Row # Permite acessar colunas por nome
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    
     return conn
 
 def init_db():
@@ -17,10 +20,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL, -- Em produção, use hash de senha
+            password TEXT NOT NULL,
             nickname TEXT,
-            wallet_address TEXT UNIQUE, -- Endereço da carteira Allianza (ÚNICO para cada usuário)
-            private_key TEXT, -- Chave privada da carteira gerada internamente
+            wallet_address TEXT UNIQUE,
+            private_key TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
@@ -38,7 +41,6 @@ def init_db():
         );
     ''')
 
-
     # Tabela de ledger imutável
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ledger_entries (
@@ -54,7 +56,6 @@ def init_db():
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
     ''')
-
 
     # Tabela de solicitações de saque
     cursor.execute('''
@@ -79,19 +80,49 @@ def init_db():
             id TEXT PRIMARY KEY,
             user_id INTEGER NOT NULL,
             amount REAL NOT NULL,
-            duration INTEGER NOT NULL,
-            apy REAL NOT NULL,
+            staking_plan TEXT NOT NULL,
             start_date TEXT NOT NULL,
             end_date TEXT NOT NULL,
-            estimated_reward REAL NOT NULL,
-            accrued_reward REAL DEFAULT 0.0 NOT NULL,
             status TEXT DEFAULT 'active' NOT NULL,
-            auto_compound BOOLEAN DEFAULT FALSE NOT NULL,
-            last_reward_claim TEXT NOT NULL,
-            days_remaining INTEGER NOT NULL,
+            last_reward_claim TEXT,
+            total_rewards_claimed REAL DEFAULT 0.0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+    ''')
+
+    # Tabela de compras do site
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS site_purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            amount REAL NOT NULL,
+            method TEXT NOT NULL,
+            source_name TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    ''')
+
+    # Tabela de pagamentos diretos com cripto (NOVA)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS direct_crypto_payments (
+            payment_id TEXT PRIMARY KEY,
+            email TEXT NOT NULL,
+            amount_brl REAL NOT NULL,
+            currency TEXT NOT NULL,
+            required_amount REAL NOT NULL,
+            master_wallet TEXT NOT NULL,
+            network TEXT NOT NULL,
+            description TEXT,
+            qr_data TEXT,
+            qr_code_base64 TEXT,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            confirmed_at TEXT,
+            tx_hash TEXT
         );
     ''')
 
@@ -101,4 +132,3 @@ def init_db():
 if __name__ == '__main__':
     init_db()
     print("Banco de dados inicializado com sucesso.")
-
