@@ -1,11 +1,13 @@
 # backend_staking_routes_improved.py - COM RETIRADA INDIVIDUALIZADA E CARDS
 from flask import Blueprint, request, jsonify
+from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
 import time
 from database_neon import get_db_connection
 from functools import wraps
 
 staking_bp = Blueprint('staking', __name__)
+CORS(staking_bp, resources={r"/staking/*": {"origins": "*"}})
 
 # Configurações de Staking
 STAKING_PLANS = {
@@ -67,9 +69,27 @@ def get_user_id_from_token(token):
     return None
 
 def safe_datetime_aware(dt):
-    """Convert datetime to timezone-aware if needed"""
-    if dt and dt.tzinfo is None:
+    """Convert datetime to timezone-aware if needed, handling string dates from SQLite"""
+    if dt is None:
+        return None
+    
+    # Se for uma string (comum no SQLite), converte para datetime
+    if isinstance(dt, str):
+        try:
+            dt = datetime.fromisoformat(dt)
+        except ValueError:
+            try:
+                dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f')
+            except ValueError:
+                try:
+                    dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    return None
+    
+    # Se for um objeto datetime e for naive, torna-o aware (UTC)
+    if isinstance(dt, datetime) and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
+    
     return dt
 
 def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=None):
@@ -77,9 +97,9 @@ def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=Non
     now = datetime.now(timezone.utc)
     
     if last_claim_date:
-        start_calc = last_claim_date
+        start_calc = safe_datetime_aware(last_claim_date)
     else:
-        start_calc = start_date
+        start_calc = safe_datetime_aware(start_date)
     
     # Calculate days elapsed
     days_elapsed = (now - start_calc).total_seconds() / (24 * 3600)
@@ -94,6 +114,7 @@ def calculate_days_remaining(end_date):
     """Calculate days remaining until maturity"""
     now = datetime.now(timezone.utc)
     end_date_aware = safe_datetime_aware(end_date)
+    # now já é timezone-aware (UTC) de calculate_days_remaining
     days_remaining = (end_date_aware - now).total_seconds() / (24 * 3600)
     return max(days_remaining, 0)
 
@@ -607,9 +628,9 @@ def get_my_stakes():
                     "amount": float(stake_dict['amount']),
                     "staking_plan": stake_dict['staking_plan'],
                     "plan_name": plan_config['name'],
-                    "start_date": stake_dict['start_date'].isoformat() if stake_dict['start_date'] else None,
-                    "end_date": stake_dict['end_date'].isoformat() if stake_dict['end_date'] else None,
-                    "withdrawn_at": stake_dict['withdrawn_at'].isoformat() if stake_dict['withdrawn_at'] else None,
+                    "start_date": safe_datetime_aware(stake_dict['start_date']).isoformat() if stake_dict['start_date'] else None,
+                    "end_date": safe_datetime_aware(stake_dict['end_date']).isoformat() if stake_dict['end_date'] else None,
+                    "withdrawn_at": safe_datetime_aware(stake_dict['withdrawn_at']).isoformat() if stake_dict['withdrawn_at'] else None,
                     "actual_return": float(stake_dict['actual_return']) if stake_dict['actual_return'] else None,
                     "penalty_applied": float(stake_dict['penalty_applied']) if stake_dict['penalty_applied'] else None,
                     "total_rewards_claimed": float(stake_dict['total_rewards_claimed'] or 0)
