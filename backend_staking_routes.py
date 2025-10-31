@@ -3,7 +3,11 @@ from flask import Blueprint, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
 import time
-from database_neon import get_db_connection
+try:
+    from database_neon import get_db_connection
+except ImportError:
+    # Se database_neon falhar, tenta database (SQLite)
+    from database import get_db_connection
 from functools import wraps
 
 staking_bp = Blueprint('staking', __name__)
@@ -76,20 +80,36 @@ def safe_datetime_aware(dt):
     # Se for uma string (comum no SQLite), converte para datetime
     if isinstance(dt, str):
         try:
+            # Tenta fromisoformat. Se for naive, força UTC. Se for aware, converte para UTC.
             dt = datetime.fromisoformat(dt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            else:
+                dt = dt.astimezone(timezone.utc)
         except ValueError:
             try:
-                dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f')
+                dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f').replace(tzinfo=timezone.utc)
             except ValueError:
                 try:
-                    dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+                    dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                 except ValueError:
                     return None
     
-    # Se for um objeto datetime e for naive, torna-o aware (UTC)
+    # Se for um objeto datetime e for naive, torna-o aware (UTC).
+    # Isso é crucial para evitar o erro "can't subtract offset-naive and offset-aware datetimes"
+    # ao subtrair de um datetime.now(timezone.utc).
+    # A leitura do banco de dados (psycopg com row_factory=dict_row) pode retornar datetimes naive,
+    # mesmo que a coluna seja TIMESTAMPTZ.
+    # Fonte: https://www.psycopg.org/psycopg3/docs/basic/data.html#time-types
+    # O PostgreSQL armazena TIMESTAMPTZ como UTC e o psycopg3 pode retornar como naive.
+    # Portanto, forçamos o UTC para qualquer datetime naive que chegue aqui.
     if isinstance(dt, datetime) and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     
+    # Se for aware, mas não UTC, converte para UTC
+    if isinstance(dt, datetime) and dt.tzinfo is not None and dt.tzinfo != timezone.utc:
+        return dt.astimezone(timezone.utc)
+        
     return dt
 
 def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=None):
@@ -100,6 +120,10 @@ def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=Non
         start_calc = safe_datetime_aware(last_claim_date)
     else:
         start_calc = safe_datetime_aware(start_date)
+        
+    if start_calc is None:
+        # Se a data de início for None, não há como calcular. Retorna 0.
+        return 0, 0
     
     # Calculate days elapsed
     days_elapsed = (now - start_calc).total_seconds() / (24 * 3600)
@@ -114,7 +138,11 @@ def calculate_days_remaining(end_date):
     """Calculate days remaining until maturity"""
     now = datetime.now(timezone.utc)
     end_date_aware = safe_datetime_aware(end_date)
-    # now já é timezone-aware (UTC) de calculate_days_remaining
+    
+    if end_date_aware is None:
+        return 0
+        
+    # now já é timezone-aware (UTC)
     days_remaining = (end_date_aware - now).total_seconds() / (24 * 3600)
     return max(days_remaining, 0)
 
