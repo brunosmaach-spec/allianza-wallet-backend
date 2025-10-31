@@ -68,45 +68,38 @@ def get_user_id_from_token(token):
         pass
     return None
 
-def safe_datetime_aware(dt):
-    """Convert datetime to timezone-aware if needed, handling string dates from SQLite"""
-    if dt is None:
-        return None
-    
-    # Se for uma string (comum no SQLite), converte para datetime
-    if isinstance(dt, str):
-        try:
-            # Tenta fromisoformat. Se for naive, força UTC. Se for aware, converte para UTC.
-            dt = datetime.fromisoformat(dt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            else:
-                dt = dt.astimezone(timezone.utc)
-        except ValueError:
-            try:
-                dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f').replace(tzinfo=timezone.utc)
-            except ValueError:
-                try:
-                    dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-                except ValueError:
-                    return None
-    
-    # Se for um objeto datetime e for naive, torna-o aware (UTC).
-    # Isso é crucial para evitar o erro "can't subtract offset-naive and offset-aware datetimes"
-    # ao subtrair de um datetime.now(timezone.utc).
-    # A leitura do banco de dados (psycopg com row_factory=dict_row) pode retornar datetimes naive,
-    # mesmo que a coluna seja TIMESTAMPTZ.
-    # Fonte: https://www.psycopg.org/psycopg3/docs/basic/data.html#time-types
-    # O PostgreSQL armazena TIMESTAMPTZ como UTC e o psycopg3 pode retornar como naive.
-    # Portanto, forçamos o UTC para qualquer datetime naive que chegue aqui.
-    if isinstance(dt, datetime) and dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    
-    # Se for aware, mas não UTC, converte para UTC
-    if isinstance(dt, datetime) and dt.tzinfo is not None and dt.tzinfo != timezone.utc:
-        return dt.astimezone(timezone.utc)
-        
-    return dt
+	def safe_datetime_aware(dt):
+	    """Convert datetime to timezone-aware (UTC) if needed, handling string dates from DB."""
+	    if dt is None:
+	        return None
+	    
+	    # Se for uma string, converte para datetime
+	    if isinstance(dt, str):
+	        try:
+	            # Tenta fromisoformat (suporta ISO 8601 com ou sem fuso horário)
+	            dt_obj = datetime.fromisoformat(dt)
+	        except ValueError:
+	            # Tenta formatos comuns se fromisoformat falhar
+	            try:
+	                dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f')
+	            except ValueError:
+	                try:
+	                    dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+	                except ValueError:
+	                    # Se tudo falhar, retorna None
+	                    return None
+	    elif isinstance(dt, datetime):
+	        dt_obj = dt
+	    else:
+	        # Se não for string nem datetime, retorna None
+	        return None
+	        
+	    # Se for naive, torna-o aware em UTC
+	    if dt_obj.tzinfo is None:
+	        return dt_obj.replace(tzinfo=timezone.utc)
+	    
+	    # Se for aware, converte para UTC
+	    return dt_obj.astimezone(timezone.utc)
 
 def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=None):
     """Calculate staking rewards based on time elapsed"""
