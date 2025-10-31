@@ -3,11 +3,7 @@ from flask import Blueprint, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
 import time
-try:
-    from database_neon import get_db_connection
-except ImportError:
-    # Se database_neon falhar, tenta database (SQLite)
-    from database import get_db_connection
+from database_neon import get_db_connection
 from functools import wraps
 
 staking_bp = Blueprint('staking', __name__)
