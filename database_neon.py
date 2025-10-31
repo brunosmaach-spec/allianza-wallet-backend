@@ -142,6 +142,40 @@ class NeonDatabase:
                 """)
                 asset_column_exists = cursor.fetchone() is not None
                 
+                # Verificar se a coluna staking_plan existe
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'stakes' AND column_name = 'staking_plan'
+                """)
+                staking_plan_column_exists = cursor.fetchone() is not None
+                
+                if not staking_plan_column_exists:
+                    print("🔧 Adicionando coluna 'staking_plan' à tabela stakes...")
+                    cursor.execute('ALTER TABLE stakes ADD COLUMN staking_plan VARCHAR(50);')
+                    print("✅ Coluna 'staking_plan' adicionada à tabela stakes")
+                    
+                # Verificar se a coluna total_rewards_claimed existe
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'stakes' AND column_name = 'total_rewards_claimed'
+                """)
+                total_rewards_claimed_column_exists = cursor.fetchone() is not None
+                
+                if not total_rewards_claimed_column_exists:
+                    print("🔧 Adicionando coluna 'total_rewards_claimed' à tabela stakes...")
+                    cursor.execute('ALTER TABLE stakes ADD COLUMN total_rewards_claimed NUMERIC(20,8) DEFAULT 0.0;')
+                    print("✅ Coluna 'total_rewards_claimed' adicionada à tabela stakes")
+                
+                # Verificar se a coluna asset existe
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'stakes' AND column_name = 'asset'
+                """)
+                asset_column_exists = cursor.fetchone() is not None
+                
                 if not asset_column_exists:
                     print("🔧 Adicionando coluna 'asset' à tabela stakes...")
                     cursor.execute('ALTER TABLE stakes ADD COLUMN asset VARCHAR(10) DEFAULT \'ALZ\' NOT NULL;')
@@ -154,17 +188,12 @@ class NeonDatabase:
                         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                         asset VARCHAR(10) DEFAULT 'ALZ' NOT NULL,
                         amount NUMERIC(20,8) NOT NULL,
-                        duration INTEGER NOT NULL,
-                        apy NUMERIC(5,2) NOT NULL,
+                        staking_plan VARCHAR(50) NOT NULL, -- Novo campo para referenciar o plano
                         start_date TIMESTAMPTZ NOT NULL,
                         end_date TIMESTAMPTZ NOT NULL,
-                        estimated_reward NUMERIC(20,8) NOT NULL,
-                        accrued_reward NUMERIC(20,8) DEFAULT 0.0 NOT NULL,
                         status VARCHAR(20) DEFAULT 'active' NOT NULL,
-                        auto_compound BOOLEAN DEFAULT FALSE NOT NULL,
-                        last_reward_claim TIMESTAMPTZ NOT NULL,
-                        days_remaining INTEGER NOT NULL,
-                        early_withdrawal_penalty NUMERIC(5,4) DEFAULT 0.10 NOT NULL,
+                        last_reward_claim TIMESTAMPTZ, -- Pode ser NULL antes do primeiro resgate
+                        total_rewards_claimed NUMERIC(20,8) DEFAULT 0.0, -- Novo campo
                         actual_return NUMERIC(20,8),
                         penalty_applied NUMERIC(20,8),
                         withdrawn_at TIMESTAMPTZ,
