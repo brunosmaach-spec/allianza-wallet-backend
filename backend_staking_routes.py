@@ -68,38 +68,38 @@ def get_user_id_from_token(token):
         pass
     return None
 
-	def safe_datetime_aware(dt):
-	    """Convert datetime to timezone-aware (UTC) if needed, handling string dates from DB."""
-	    if dt is None:
-	        return None
-	    
-	    # Se for uma string, converte para datetime
-	    if isinstance(dt, str):
-	        try:
-	            # Tenta fromisoformat (suporta ISO 8601 com ou sem fuso horário)
-	            dt_obj = datetime.fromisoformat(dt)
-	        except ValueError:
-	            # Tenta formatos comuns se fromisoformat falhar
-	            try:
-	                dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f')
-	            except ValueError:
-	                try:
-	                    dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
-	                except ValueError:
-	                    # Se tudo falhar, retorna None
-	                    return None
-	    elif isinstance(dt, datetime):
-	        dt_obj = dt
-	    else:
-	        # Se não for string nem datetime, retorna None
-	        return None
-	        
-	    # Se for naive, torna-o aware em UTC
-	    if dt_obj.tzinfo is None:
-	        return dt_obj.replace(tzinfo=timezone.utc)
-	    
-	    # Se for aware, converte para UTC
-	    return dt_obj.astimezone(timezone.utc)
+def safe_datetime_aware(dt):
+    """Convert datetime to timezone-aware (UTC) if needed, handling string dates from DB."""
+    if dt is None:
+        return None
+    
+    # Se for uma string, converte para datetime
+    if isinstance(dt, str):
+        try:
+            # Tenta fromisoformat (suporta ISO 8601 com ou sem fuso horário)
+            dt_obj = datetime.fromisoformat(dt)
+        except ValueError:
+            # Tenta formatos comuns se fromisoformat falhar
+            try:
+                dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S.%f')
+            except ValueError:
+                try:
+                    dt_obj = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+                except ValueError:
+                    # Se tudo falhar, retorna None
+                    return None
+    elif isinstance(dt, datetime):
+        dt_obj = dt
+    else:
+        # Se não for string nem datetime, retorna None
+        return None
+        
+    # Se for naive, torna-o aware em UTC
+    if dt_obj.tzinfo is None:
+        return dt_obj.replace(tzinfo=timezone.utc)
+    
+    # Se for aware, converte para UTC
+    return dt_obj.astimezone(timezone.utc)
 
 def calculate_staking_rewards(stake_amount, apy, start_date, last_claim_date=None):
     """Calculate staking rewards based on time elapsed"""
