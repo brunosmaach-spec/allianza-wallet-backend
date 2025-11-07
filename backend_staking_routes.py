@@ -1,4 +1,4 @@
-# backend_staking_routes_improved.py - COM RETIRADA INDIVIDUALIZADA E CARDS
+# backend_staking_routes_improved.py - COM RETIRADA INDIVIDUALIZADA E CARDS - CORRIGIDO CORS
 from flask import Blueprint, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta, timezone
@@ -7,7 +7,7 @@ from database_neon import get_db_connection
 from functools import wraps
 
 staking_bp = Blueprint('staking', __name__)
-CORS(staking_bp, resources={r"/staking/*": {"origins": "*"}})
+CORS(staking_bp, resources={r"/*": {"origins": "*", "supports_credentials": True, "allow_headers": ["Content-Type", "Authorization"]}})
 
 # Configurações de Staking
 STAKING_PLANS = {
@@ -195,7 +195,7 @@ def build_stake_card(stake_dict, plan_config):
         }
     }
 
-@staking_bp.route('/staking/stake', methods=['POST'])
+
 @token_required
 def create_stake():
     """Create a new staking position"""
@@ -279,7 +279,7 @@ def create_stake():
         print(f"❌ Erro geral create-stake: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/active-stakes', methods=['GET'])
+
 @token_required
 def get_active_stakes():
     """Get all active stakes with detailed cards for withdrawal preview"""
@@ -329,7 +329,7 @@ def get_active_stakes():
         print(f"❌ Erro ao buscar stakes ativos: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/withdrawal-preview/<stake_id>', methods=['GET'])
+@staking_bp.route('/staking/withdrawal-preview/<stake_id>', methods=['GET', 'OPTIONS'])
 @token_required
 def get_withdrawal_preview(stake_id):
     """Get detailed preview of what will be received on withdrawal"""
@@ -370,17 +370,14 @@ def get_withdrawal_preview(stake_id):
         print(f"❌ Erro ao buscar preview de retirada: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/unstake', methods=['POST'])
-@token_required
-def unstake():
-    """Unstake tokens (early or at maturity) - with detailed withdrawal info"""
+
+        
     try:
         user_id = request.user_id
-        data = request.json
-        stake_id = data.get('stake_id')
+        # stake_id já está na URL (passado como argumento da função)
         
         if not stake_id:
-            return jsonify({"error": "stake_id é obrigatório"}), 400
+            return jsonify({"error": "Stake ID é obrigatório"}), 400
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -506,17 +503,16 @@ def unstake():
         print(f"❌ Erro geral unstake: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/claim-rewards', methods=['POST'])
+@staking_bp.route('/staking/claim-rewards', methods=['POST', 'OPTIONS'])
 @token_required
 def claim_staking_rewards():
     """Claim staking rewards for a specific stake"""
     try:
         user_id = request.user_id
-        data = request.json
-        stake_id = data.get('stake_id')
+        # stake_id já está na URL (passado como argumento da função)
         
         if not stake_id:
-            return jsonify({"error": "stake_id é obrigatório"}), 400
+            return jsonify({"error": "Stake ID é obrigatório"}), 400
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -599,7 +595,12 @@ def claim_staking_rewards():
         print(f"❌ Erro geral claim-rewards: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/me', methods=['GET'])
+
+@staking_bp.route('/active-stakes', methods=['OPTIONS'])
+def active_stakes_options():
+    return '', 200
+
+@staking_bp.route('/active-stakes', methods=['GET'])
 @token_required
 def get_my_stakes():
     """Get user's staking positions with detailed cards"""
@@ -672,7 +673,7 @@ def get_my_stakes():
         print(f"❌ Erro ao buscar stakes: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/options', methods=['GET'])
+@staking_bp.route('/staking/options', methods=['GET', 'OPTIONS'])
 def get_staking_options():
     """Get available staking plans"""
     try:
@@ -696,7 +697,7 @@ def get_staking_options():
         print(f"❌ Erro ao buscar opções: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/stats', methods=['GET'])
+@staking_bp.route('/stats', methods=['GET', 'OPTIONS'])
 @token_required
 def get_staking_stats():
     """Get staking statistics for user"""
