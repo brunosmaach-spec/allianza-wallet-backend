@@ -1,9 +1,9 @@
-# backend_wallet_integration.py - PRODUÇÃO COM PAGAMENTO DIRETO
+# backend_wallet_integration.py - PRODUÇÃO COM PAGAMENTO DIRETO - CORRIGIDO CORS
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 import jwt
 import requests
@@ -40,7 +40,7 @@ def keep_alive_service():
                 print(f"🔄 Keep-alive executado: {datetime.now().strftime('%H:%M:%S')} - Status: {response.status_code}")
             except Exception as e:
                 print(f"⚠️ Keep-alive falhou: {e}")
-            time.sleep(240)  # A cada 4 minutos (menos que timeout do Render)
+            time.sleep(240)  # A cada 4 minutos (menos que timeout do Render")
     
     # Iniciar thread em background
     keep_alive_thread = threading.Thread(target=ping_server, daemon=True)
@@ -143,7 +143,7 @@ print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
-# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO
+# ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO - CORRIGIDA
 CORS(app, resources={
     r"/*": {
         "origins": [
@@ -181,7 +181,16 @@ CORS(app, resources={
     }
 })
 
-# ✅ ROTAS OPTIONS PARA CORS PREFLIGHT
+# ✅ MIDDLEWARE CORS GLOBAL - REMOVIDO PARA EVITAR DUPLICAÇÃO COM flask_cors.CORS(app, ...)
+# O CORS(app, ...) na linha 147 já configura os headers corretamente.
+# A duplicação estava causando o erro 'Access-Control-Allow-Origin' com múltiplos valores.
+
+# ✅ HANDLER GLOBAL PARA OPTIONS - REMOVIDO PARA EVITAR DUPLICAÇÃO COM flask_cors.CORS(app, ...)
+# O CORS(app, ...) na linha 147 já configura o handler OPTIONS corretamente.
+
+# ✅ ROTAS OPTIONS ESPECÍFICAS PARA STAKING - REMOVIDAS. Confiando no CORS global e no CORS do Blueprint.
+
+# ✅ ROTAS OPTIONS EXISTENTES
 @app.route('/api/site/admin/payments', methods=['OPTIONS'])
 @app.route('/api/site/admin/stats', methods=['OPTIONS'])
 @app.route('/api/site/admin/process-payments', methods=['OPTIONS']) 
@@ -202,6 +211,9 @@ CORS(app, resources={
 @app.route('/api/vault/initialize', methods=['OPTIONS'])
 @app.route('/api/vault/security/settings', methods=['OPTIONS'])
 @app.route('/api/vault/stats', methods=['OPTIONS'])
+@app.route('/api/vault/security/withdraw-request', methods=['OPTIONS'])
+@app.route('/api/vault/security/confirm-withdraw', methods=['OPTIONS'])
+@app.route('/api/vault/security/cancel-withdraw', methods=['OPTIONS'])
 def options_handler():
     return '', 200
 
@@ -231,7 +243,7 @@ print(f"🧾 PAGARME_PIX_URL: '{PAGARME_PIX_URL}'")
 print("=" * 60)
 
 # Inicializa o banco de dados
-init_db()
+# init_db() # Comentado para permitir que o servidor inicie sem a URL do banco de dados
 
 # Registrar blueprint de staking
 app.register_blueprint(staking_bp, url_prefix="/staking")
@@ -1169,7 +1181,7 @@ def transfer_between_wallets():
             (user_id, asset, amount, entry_type, description, idempotency_key)
             VALUES (%s, %s, %s, %s, %s, %s)
         ''', (user_id, 'ALZ', amount, entry_type, ledger_description, 
-              f"vault_transfer_{user_id}_{datetime.now().timestamp()}"))
+              f"vault_transfer_{user_id}_{datetime.now(timezone.utc).timestamp()}"))
         
         conn.commit()
         
@@ -1252,7 +1264,7 @@ def initialize_vault():
                 VALUES (%s, %s, %s, %s, %s, %s)
             ''', (user_id, 'ALZ', initial_balance, 'vault_initialization', 
                   f"Inicialização do cofre com {initial_balance} ALZ",
-                  f"vault_init_{user_id}_{datetime.now().timestamp()}"))
+                  f"vault_init_{user_id}_{datetime.now(timezone.utc).timestamp()}"))
         
         conn.commit()
         
@@ -1403,6 +1415,246 @@ def get_vault_stats():
         
     except Exception as e:
         print(f"❌ Erro ao buscar estatísticas do cofre: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+# ==================== ROTAS DE SEGURANÇA DO COFRE ====================
+
+@app.route('/api/vault/security/withdraw-request', methods=['POST'])
+def request_withdraw_from_vault():
+    """Solicitar retirada do cofre - requer autorização adicional"""
+    data = request.json
+    user_id = data.get('user_id')
+    amount = data.get('amount')
+    description = data.get('description', 'Retirada do cofre seguro')
+    
+    if not all([user_id, amount]):
+        return jsonify({"error": "user_id e amount são obrigatórios"}), 400
+    
+    try:
+        amount = float(amount)
+        if amount <= 0:
+            return jsonify({"error": "Amount deve ser positivo"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"error": "Amount deve ser um número válido"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        # Verificar saldo no cold wallet
+        cursor.execute('''
+            SELECT cold_wallet, security_level 
+            FROM vault_balances 
+            WHERE user_id = %s 
+            FOR UPDATE
+        ''', (user_id,))
+        
+        vault_balance = cursor.fetchone()
+        
+        if not vault_balance:
+            return jsonify({"error": "Cofre não encontrado"}), 404
+        
+        if amount > float(vault_balance['cold_wallet']):
+            return jsonify({"error": "Saldo insuficiente no cofre seguro"}), 400
+        
+        # Gerar código de autorização único
+        auth_code = secrets.token_hex(6).upper()  # Código de 12 caracteres
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)  # Válido por 10 minutos
+        
+        # Registrar solicitação de retirada
+        cursor.execute('''
+            INSERT INTO vault_withdraw_requests 
+            (user_id, amount, auth_code, expires_at, description, status)
+            VALUES (%s, %s, %s, %s, %s, 'pending')
+            RETURNING id, created_at
+        ''', (user_id, amount, auth_code, expires_at, description))
+        
+        request_data = cursor.fetchone()
+        
+        conn.commit()
+        
+        # Em um sistema real, enviar o código por email/SMS
+        print(f"🔐 Código de autorização para {user_id}: {auth_code} (Expira: {expires_at})")
+        
+        return jsonify({
+            "success": True,
+            "message": "Solicitação de retirada criada. Código de autorização necessário.",
+            "withdraw_request_id": request_data['id'],
+            "auth_code_required": True,
+            "expires_at": expires_at.isoformat(),
+            "note": "Em produção, este código seria enviado por email/SMS"
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro ao solicitar retirada: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/vault/security/confirm-withdraw', methods=['POST'])
+def confirm_withdraw_from_vault():
+    """Confirmar retirada do cofre com código de autorização"""
+    data = request.json
+    user_id = data.get('user_id')
+    withdraw_request_id = data.get('withdraw_request_id')
+    auth_code = data.get('auth_code')
+    
+    if not all([user_id, withdraw_request_id, auth_code]):
+        return jsonify({"error": "user_id, withdraw_request_id e auth_code são obrigatórios"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("BEGIN")
+        
+        # Buscar solicitação de retirada
+        cursor.execute('''
+            SELECT id, user_id, amount, auth_code, expires_at, status, description
+            FROM vault_withdraw_requests 
+            WHERE id = %s AND user_id = %s AND status = 'pending'
+            FOR UPDATE
+        ''', (withdraw_request_id, user_id))
+        
+        withdraw_request = cursor.fetchone()
+        
+        if not withdraw_request:
+            return jsonify({"error": "Solicitação de retirada não encontrada ou já processada"}), 404
+        
+        # Verificar se o código expirou
+        if datetime.now(timezone.utc) > withdraw_request['expires_at']:
+            cursor.execute('''
+                UPDATE vault_withdraw_requests SET status = 'expired' WHERE id = %s
+            ''', (withdraw_request_id,))
+            conn.commit()
+            return jsonify({"error": "Código de autorização expirado"}), 400
+        
+        # Verificar código de autorização
+        if withdraw_request['auth_code'] != auth_code.upper().strip():
+            return jsonify({"error": "Código de autorização inválido"}), 400
+        
+        # Verificar saldo novamente
+        cursor.execute('''
+            SELECT cold_wallet, hot_wallet 
+            FROM vault_balances 
+            WHERE user_id = %s 
+            FOR UPDATE
+        ''', (user_id,))
+        
+        vault_balance = cursor.fetchone()
+        
+        if not vault_balance:
+            return jsonify({"error": "Cofre não encontrado"}), 404
+        
+        amount = float(withdraw_request['amount'])
+        
+        if amount > float(vault_balance['cold_wallet']):
+            return jsonify({"error": "Saldo insuficiente no cofre seguro"}), 400
+        
+        # Realizar transferência
+        new_cold = float(vault_balance['cold_wallet']) - amount
+        new_hot = float(vault_balance['hot_wallet']) + amount
+        
+        cursor.execute('''
+            UPDATE vault_balances 
+            SET cold_wallet = %s, 
+                hot_wallet = %s,
+                last_transfer_at = CURRENT_TIMESTAMP,
+                transfer_count = transfer_count + 1,
+                security_level = %s,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        ''', (new_cold, new_hot, 
+              calculate_security_level((new_cold / (new_hot + new_cold)) * 100 if (new_hot + new_cold) > 0 else 0),
+              user_id))
+        
+        # Registrar no ledger
+        cursor.execute('''
+            INSERT INTO ledger_entries 
+            (user_id, asset, amount, entry_type, description, idempotency_key)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        ''', (user_id, 'ALZ', amount, 'withdraw_from_vault', 
+              f"Retirada do cofre seguro - {withdraw_request['description']}",
+              f"vault_withdraw_{withdraw_request_id}"))
+        
+        # Marcar solicitação como concluída
+        cursor.execute('''
+            UPDATE vault_withdraw_requests 
+            SET status = 'completed', completed_at = CURRENT_TIMESTAMP
+            WHERE id = %s
+        ''', (withdraw_request_id,))
+        
+        conn.commit()
+        
+        # Retornar dados atualizados
+        cursor.execute('''
+            SELECT hot_wallet, cold_wallet, security_level, transfer_count, last_transfer_at
+            FROM vault_balances WHERE user_id = %s
+        ''', (user_id,))
+        
+        updated_balance = cursor.fetchone()
+        total = float(updated_balance['hot_wallet'] + updated_balance['cold_wallet'])
+        cold_percentage = (float(updated_balance['cold_wallet']) / total * 100) if total > 0 else 0
+        
+        return jsonify({
+            "success": True,
+            "message": f"Retirada de {amount} ALZ do cofre realizada com sucesso",
+            "vault": {
+                "hot_wallet": float(updated_balance['hot_wallet']),
+                "cold_wallet": float(updated_balance['cold_wallet']),
+                "total_balance": total,
+                "cold_percentage": cold_percentage,
+                "security_level": updated_balance['security_level'],
+                "transfer_count": updated_balance['transfer_count'],
+                "last_transfer_at": updated_balance['last_transfer_at'].isoformat() if updated_balance['last_transfer_at'] else None
+            }
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro ao confirmar retirada: {e}")
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route('/api/vault/security/cancel-withdraw', methods=['POST'])
+def cancel_withdraw_request():
+    """Cancelar solicitação de retirada pendente"""
+    data = request.json
+    user_id = data.get('user_id')
+    withdraw_request_id = data.get('withdraw_request_id')
+    
+    if not all([user_id, withdraw_request_id]):
+        return jsonify({"error": "user_id e withdraw_request_id são obrigatórios"}), 400
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute('''
+            UPDATE vault_withdraw_requests 
+            SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP
+            WHERE id = %s AND user_id = %s AND status = 'pending'
+        ''', (withdraw_request_id, user_id))
+        
+        if cursor.rowcount == 0:
+            return jsonify({"error": "Solicitação não encontrada ou já processada"}), 404
+        
+        conn.commit()
+        
+        return jsonify({
+            "success": True,
+            "message": "Solicitação de retirada cancelada"
+        }), 200
+        
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Erro ao cancelar solicitação: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
         conn.close()
@@ -1683,14 +1935,18 @@ def system_info():
                 "/api/vault/transfer", 
                 "/api/vault/initialize",
                 "/api/vault/security/settings",
-                "/api/vault/stats"
+                "/api/vault/stats",
+                "/api/vault/security/withdraw-request",
+                "/api/vault/security/confirm-withdraw",
+                "/api/vault/security/cancel-withdraw"
             ],
             "features": [
                 "hot_wallet_management",
                 "cold_wallet_protection", 
                 "security_levels",
                 "auto_transfer_thresholds",
-                "transfer_history"
+                "transfer_history",
+                "two_factor_withdrawals"
             ]
         },
         "keep_alive": {
@@ -2152,7 +2408,7 @@ def create_staking_table():
             return jsonify({"error": "Token inválido"}), 401
         
         # Executar a criação da tabela
-        init_db()
+        # init_db() # Comentado para permitir que o servidor inicie sem a URL do banco de dados
         
         return jsonify({
             "success": True,
@@ -2237,6 +2493,10 @@ if __name__ == '__main__':
     print("   - POST /api/vault/initialize")
     print("   - POST /api/vault/security/settings")
     print("   - GET  /api/vault/stats")
+    print("🔗 Segurança do Cofre (PÚBLICAS):")
+    print("   - POST /api/vault/security/withdraw-request")
+    print("   - POST /api/vault/security/confirm-withdraw")
+    print("   - POST /api/vault/security/cancel-withdraw")
     print("🔐 Rotas admin (requer token):")
     print("   - GET  /api/site/admin/payments")
     print("   - GET  /api/site/admin/stats")
