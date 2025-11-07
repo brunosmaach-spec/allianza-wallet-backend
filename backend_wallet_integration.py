@@ -56,18 +56,13 @@ direct_crypto_service = None
 
 try:
     # Tenta importar de várias formas possíveis
-    try:
-        from direct_crypto_service import direct_crypto_service
-        DIRECT_CRYPTO_AVAILABLE = True
-        print("✅ Direct Crypto Payment Service importado com sucesso!")
-    except ImportError as e:
-        print(f"❌ Erro na importação padrão: {e}")
-        # Tenta importação alternativa
-        import direct_crypto_service
-        direct_crypto_service = direct_crypto_service.direct_crypto_service
-        DIRECT_CRYPTO_AVAILABLE = True
-        print("✅ Direct Crypto Service importado via método alternativo!")
+    from direct_crypto_service import direct_crypto_service
+    DIRECT_CRYPTO_AVAILABLE = True
+    print("✅ Direct Crypto Payment Service importado com sucesso!")
         
+except ImportError as e:
+    print(f"❌ Erro ao importar Direct Crypto Service: {e}")
+    DIRECT_CRYPTO_AVAILABLE = False
 except Exception as e:
     print(f"❌ Erro crítico ao importar Direct Crypto Service: {e}")
     DIRECT_CRYPTO_AVAILABLE = False
