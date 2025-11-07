@@ -196,6 +196,11 @@ def build_stake_card(stake_dict, plan_config):
     }
 
 
+@staking_bp.route('/staking/stake', methods=['OPTIONS'])
+def create_stake_options():
+    return '', 200
+
+@staking_bp.route('/staking/stake', methods=['POST'])
 @token_required
 def create_stake():
     """Create a new staking position"""
@@ -673,7 +678,11 @@ def get_my_stakes():
         print(f"❌ Erro ao buscar stakes: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/staking/options', methods=['GET', 'OPTIONS'])
+@staking_bp.route('/staking/options', methods=['OPTIONS'])
+def staking_options_options():
+    return '', 200
+
+@staking_bp.route('/staking/options', methods=['GET'])
 def get_staking_options():
     """Get available staking plans"""
     try:
@@ -697,7 +706,11 @@ def get_staking_options():
         print(f"❌ Erro ao buscar opções: {e}")
         return jsonify({"error": str(e)}), 500
 
-@staking_bp.route('/stats', methods=['GET', 'OPTIONS'])
+@staking_bp.route('/staking/stats', methods=['OPTIONS'])
+def staking_stats_options():
+    return '', 200
+
+@staking_bp.route('/staking/stats', methods=['GET'])
 @token_required
 def get_staking_stats():
     """Get staking statistics for user"""
