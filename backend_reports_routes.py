@@ -60,32 +60,32 @@ class DateRangeCalculator:
         end_date: Optional[str] = None
     ) -> Tuple[str, str]:
         """
-	        Calcula o intervalo de datas baseado no período especificado.
-	        """
-	        now = datetime.now(timezone.utc)
-	        
-	        period_handlers = {
-	            'today': lambda: (
-	                now.replace(hour=0, minute=0, second=0, microsecond=0),
-	                now
-	            ),
-	            'week': lambda: (
-	                (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0),
-	                now
-	            ),
-	            'month': lambda: (
-	                now.replace(day=1, hour=0, minute=0, second=0, microsecond=0),
-	                now
-	            ),
-	            'year': lambda: (
-	                now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0),
-	                now
-	            ),
-	            '7d': lambda: (now - timedelta(days=7), now),
-	            '30d': lambda: (now - timedelta(days=30), now),
-	            '90d': lambda: (now - timedelta(days=90), now),
-	            '1y': lambda: (now - timedelta(days=365), now)
-	        }
+        Calcula o intervalo de datas baseado no período especificado.
+        """
+        now = datetime.now(timezone.utc)
+
+        period_handlers = {
+            'today': lambda: (
+                now.replace(hour=0, minute=0, second=0, microsecond=0),
+                now
+            ),
+            'week': lambda: (
+                (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0),
+                now
+            ),
+            'month': lambda: (
+                now.replace(day=1, hour=0, minute=0, second=0, microsecond=0),
+                now
+            ),
+            'year': lambda: (
+                now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0),
+                now
+            ),
+            '7d': lambda: (now - timedelta(days=7), now),
+            '30d': lambda: (now - timedelta(days=30), now),
+            '90d': lambda: (now - timedelta(days=90), now),
+            '1y': lambda: (now - timedelta(days=365), now)
+        }
         
         if period == 'custom':
             if not start_date or not end_date:
