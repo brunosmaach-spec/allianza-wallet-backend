@@ -589,6 +589,22 @@ def manual_token_send():
     finally:
         conn.close()
 
+# ✅ DEBUG CORRIGIDO - Endpoint público para verificar token configurado
+@admin_bp.route('/debug-token-info', methods=['GET'])
+def debug_token_info():
+    """Endpoint público para debug - mostra qual token o backend está esperando"""
+    env_token = os.getenv('VITE_SITE_ADMIN_TOKEN', 'NOT_FOUND')
+    return jsonify({
+        "token_from_env": env_token[:20] + "..." if len(env_token) > 20 else env_token,
+        "token_length": len(env_token) if env_token != 'NOT_FOUND' else 0,
+        "token_first_10": env_token[:10] if env_token != 'NOT_FOUND' else "NOT_FOUND",
+        "token_last_10": env_token[-10:] if env_token != 'NOT_FOUND' and len(env_token) > 10 else "NOT_FOUND",
+        "env_var_exists": env_token != 'NOT_FOUND',
+        "site_admin_token_used": SITE_ADMIN_TOKEN[:20] + "..." if len(SITE_ADMIN_TOKEN) > 20 else SITE_ADMIN_TOKEN,
+        "site_admin_token_length": len(SITE_ADMIN_TOKEN),
+        "message": "Debug de token - verifique se VITE_SITE_ADMIN_TOKEN está configurado"
+    }), 200
+
 # ✅ DEBUG CORRIGIDO
 @admin_bp.route('/admin/debug-token', methods=['GET'])
 @admin_required
