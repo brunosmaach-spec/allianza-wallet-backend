@@ -6,6 +6,11 @@ from flask_cors import CORS
 from functools import wraps
 import jwt
 from datetime import datetime, timedelta
+
+# ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO
+from dotenv import load_dotenv
+load_dotenv()
+
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -25,7 +30,15 @@ def get_db_connection():
 
 # ✅ CONSTANTES GLOBAIS - Evitar recálculos
 ALZ_PRICE_BRL = 0.10  # 1 ALZ = R$ 0,10
-SITE_ADMIN_TOKEN = os.getenv('VITE_SITE_ADMIN_TOKEN', 'allianza_super_admin_2024_CdE25$$$')
+
+# ✅ CARREGAR TOKEN DA VARIÁVEL DE AMBIENTE (com debug)
+_env_token = os.getenv('VITE_SITE_ADMIN_TOKEN')
+if _env_token:
+    SITE_ADMIN_TOKEN = _env_token
+    print(f"✅ VITE_SITE_ADMIN_TOKEN carregado: {_env_token[:10]}... (comprimento: {len(_env_token)})")
+else:
+    SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'
+    print(f"⚠️  VITE_SITE_ADMIN_TOKEN não encontrado, usando valor padrão: {SITE_ADMIN_TOKEN[:10]}...")
 
 def admin_required(f):
     @wraps(f)
