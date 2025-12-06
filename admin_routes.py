@@ -136,9 +136,9 @@ def get_payments():
         
     except Exception as e:
         print(f"❌ Erro ao carregar pagamentos: {str(e)}")
-	        return jsonify({"error": f"Erro no servidor: {str(e)}"}), 500
-	    finally:
-	        conn.close()
+        return jsonify({"error": f"Erro no servidor: {str(e)}"}), 500
+    finally:
+        conn.close()
 
 # ✅ ROTA PARA LISTAR TODOS OS STAKES
 @admin_bp.route('/admin/stakes', methods=['GET'])
