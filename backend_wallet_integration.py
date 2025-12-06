@@ -241,9 +241,17 @@ ADMIN_USERS = {
     'admin': ADMIN_PASSWORD,
 }
 
-# ✅ TOKEN CORRETO - PRODUÇÃO (FORCE O TOKEN CORRETO)
+# ✅ TOKEN CORRETO - PRODUÇÃO (CARREGAR DO AMBIENTE)
 ADMIN_JWT_SECRET = os.getenv('ADMIN_JWT_SECRET', 'super-secret-jwt-key-2024-allianza-prod')
-SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'  # ✅ FORCE 34 CARACTERES
+
+# ✅ CARREGAR TOKEN DA VARIÁVEL DE AMBIENTE (com debug)
+_env_token = os.getenv('VITE_SITE_ADMIN_TOKEN')
+if _env_token:
+    SITE_ADMIN_TOKEN = _env_token
+    print(f"✅ VITE_SITE_ADMIN_TOKEN carregado em backend_wallet_integration: {_env_token[:10]}... (comprimento: {len(_env_token)})")
+else:
+    SITE_ADMIN_TOKEN = 'allianza_super_admin_2024_CdE25$$$'
+    print(f"⚠️  VITE_SITE_ADMIN_TOKEN não encontrado em backend_wallet_integration, usando valor padrão: {SITE_ADMIN_TOKEN[:10]}...")
 
 # Configurações de Pagamento - PRODUÇÃO
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', 'whsec_default_secret_change_in_production')
