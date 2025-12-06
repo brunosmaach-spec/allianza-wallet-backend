@@ -275,12 +275,19 @@ print("=" * 60)
 from admin_routes import admin_bp
 from backend_reports_routes import reports_bp
 from backend_staking_routes import staking_bp
-from balance_ledger_routes import balance_ledger_bp
 
+# Registrar blueprints obrigatórios
 app.register_blueprint(admin_bp, url_prefix="/api/site")
 app.register_blueprint(reports_bp, url_prefix="/reports")
 app.register_blueprint(staking_bp, url_prefix="/api")
-app.register_blueprint(balance_ledger_bp)
+
+# ✅ Importação opcional de balance_ledger_routes
+try:
+    from balance_ledger_routes import balance_ledger_bp
+    app.register_blueprint(balance_ledger_bp)
+    print("✅ Balance Ledger routes registradas")
+except ImportError as e:
+    print(f"⚠️  Balance Ledger routes não disponíveis: {e}")
 
 # 🔒 Middleware de Autenticação Admin
 def admin_required(f):
