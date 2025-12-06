@@ -1,5 +1,5 @@
 # backend_wallet_integration.py - PRODUÇÃO COM PAGAMENTO DIRETO - CORRIGIDO CORS
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, redirect
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
@@ -13,6 +13,14 @@ import hashlib
 import secrets
 import json
 import threading
+
+# Importar serviço de blockchain Allianza
+try:
+    from allianza_blockchain_service import get_allianza_blockchain_service
+    ALLIANZA_BLOCKCHAIN_AVAILABLE = True
+except ImportError:
+    ALLIANZA_BLOCKCHAIN_AVAILABLE = False
+    print("⚠️  Allianza Blockchain Service não disponível")
 
 # ✅ CARREGAR VARIÁVEIS DE AMBIENTE PRIMEIRO
 from dotenv import load_dotenv
@@ -56,13 +64,18 @@ direct_crypto_service = None
 
 try:
     # Tenta importar de várias formas possíveis
-    from direct_crypto_service import direct_crypto_service
-    DIRECT_CRYPTO_AVAILABLE = True
-    print("✅ Direct Crypto Payment Service importado com sucesso!")
+    try:
+        from direct_crypto_service import direct_crypto_service
+        DIRECT_CRYPTO_AVAILABLE = True
+        print("✅ Direct Crypto Payment Service importado com sucesso!")
+    except ImportError as e:
+        print(f"❌ Erro na importação padrão: {e}")
+        # Tenta importação alternativa
+        import direct_crypto_service
+        direct_crypto_service = direct_crypto_service.direct_crypto_service
+        DIRECT_CRYPTO_AVAILABLE = True
+        print("✅ Direct Crypto Service importado via método alternativo!")
         
-except ImportError as e:
-    print(f"❌ Erro ao importar Direct Crypto Service: {e}")
-    DIRECT_CRYPTO_AVAILABLE = False
 except Exception as e:
     print(f"❌ Erro crítico ao importar Direct Crypto Service: {e}")
     DIRECT_CRYPTO_AVAILABLE = False
@@ -132,16 +145,17 @@ except ImportError as e:
     exit(1)
 
 from generate_wallet import generate_polygon_wallet
-from backend_staking_routes import staking_bp
 
 print("🚀 Iniciando servidor Flask Allianza Wallet...")
 
 app = Flask(__name__)
 
+
 # ✅ CONFIGURAÇÃO CORS COMPLETA PARA PRODUÇÃO E DESENVOLVIMENTO - CORRIGIDA
 CORS(app, resources={
     r"/*": {
         "origins": [
+            "*",
             "https://allianza.tech",
             "https://admin.allianza.tech",
             "https://www.allianza.tech", 
@@ -191,9 +205,10 @@ CORS(app, resources={
 @app.route('/api/site/admin/process-payments', methods=['OPTIONS']) 
 @app.route('/api/site/admin/manual-token-send', methods=['OPTIONS'])
 @app.route('/api/site/admin/debug-token', methods=['OPTIONS'])
+@app.route('/api/site/admin/debug-token-info', methods=['OPTIONS', 'GET'])
 @app.route('/api/site/admin/create-staking-table', methods=['OPTIONS'])
 @app.route('/api/site/admin/check-tables', methods=['OPTIONS'])
-@app.route('/health', methods=['OPTIONS'])
+@app.route('/health', methods=['GET', 'OPTIONS'])
 @app.route('/api/site/purchase', methods=['OPTIONS'])
 @app.route('/create-checkout-session', methods=['OPTIONS'])
 @app.route('/create-pagarme-pix', methods=['OPTIONS'])
@@ -209,8 +224,16 @@ CORS(app, resources={
 @app.route('/api/vault/security/withdraw-request', methods=['OPTIONS'])
 @app.route('/api/vault/security/confirm-withdraw', methods=['OPTIONS'])
 @app.route('/api/vault/security/cancel-withdraw', methods=['OPTIONS'])
+@app.route('/balances/me', methods=['OPTIONS'])
+@app.route('/ledger/history', methods=['OPTIONS'])
+@app.route('/login', methods=['OPTIONS'])
+@app.route('/register', methods=['OPTIONS'])
 def options_handler():
     return '', 200
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({"status": "OK", "message": "Backend is running"}), 200
 
 # 🔐 CONFIGURAÇÕES DE SEGURANÇA ADMIN - PRODUÇÃO (CORRIGIDO)
 ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD_1', 'CdE25$$$')
@@ -240,8 +263,16 @@ print("=" * 60)
 # Inicializa o banco de dados
 # init_db() # Comentado para permitir que o servidor inicie sem a URL do banco de dados
 
-# Registrar blueprint de staking
-app.register_blueprint(staking_bp, url_prefix="/staking")
+# Registrar blueprints
+from admin_routes import admin_bp
+from backend_reports_routes import reports_bp
+from backend_staking_routes import staking_bp
+from balance_ledger_routes import balance_ledger_bp
+
+app.register_blueprint(admin_bp, url_prefix="/api/site")
+app.register_blueprint(reports_bp, url_prefix="/reports")
+app.register_blueprint(staking_bp, url_prefix="/api")
+app.register_blueprint(balance_ledger_bp)
 
 # 🔒 Middleware de Autenticação Admin
 def admin_required(f):
@@ -520,6 +551,25 @@ def site_purchase():
         )
         
         conn.commit()
+        
+        # Registrar transação na blockchain Allianza
+        if ALLIANZA_BLOCKCHAIN_AVAILABLE:
+            try:
+                blockchain_service = get_allianza_blockchain_service()
+                blockchain_result = blockchain_service.register_purchase_transaction(
+                    user_id=user_id,
+                    amount=amount_alz,
+                    payment_method=method,
+                    metadata={
+                        "payment_id": payment_id,
+                        "amount_brl": amount_brl,
+                        "email": email
+                    }
+                )
+                if blockchain_result.get('success'):
+                    print(f"✅ Transação registrada na blockchain: {blockchain_result.get('tx_hash')}")
+            except Exception as e:
+                print(f"⚠️  Erro ao registrar na blockchain: {e}")
         
         return jsonify({
             "success": True,
@@ -852,7 +902,7 @@ def create_direct_crypto_payment():
             return jsonify({
                 "success": False,
                 "error": result['error']
-            }), 500
+            }, 500)
 
     except Exception as e:
         print(f"❌ Erro ao criar pagamento direto: {e}")
@@ -1261,7 +1311,7 @@ def initialize_vault():
                   f"Inicialização do cofre com {initial_balance} ALZ",
                   f"vault_init_{user_id}_{datetime.now(timezone.utc).timestamp()}"))
         
-        conn.commit()
+        conn.commit();
         
         return jsonify({
             "success": True,
@@ -1654,813 +1704,10 @@ def cancel_withdraw_request():
     finally:
         conn.close()
 
-# ===== ROTAS EXISTENTES DA WALLET =====
-
-# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG)
-def get_user_id_from_token(token):
-    try:
-        parts = token.split("_")
-        if len(parts) >= 3 and parts[0] == "mock" and parts[1] == "token":
-            return int(parts[2])
-    except (ValueError, IndexError):
-        pass
-    return None
-
-# 👤 ROTA DE REGISTRO
-@app.route("/register", methods=["POST"])
-def register_user():
-    data = request.json
-    email = data.get("email")
-    nickname = data.get("nickname")
-    password = data.get("password")
-    
-    if not email or not password or not nickname:
-        return jsonify({"error": "Email, nickname, and password are required"}), 400
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
-        if cursor.fetchone():
-            return jsonify({"error": "User already exists"}), 400
-
-        private_key, wallet_address = generate_polygon_wallet()
-        hashed_password = generate_password_hash(password)
-
-        cursor.execute(
-            "INSERT INTO users (email, password, nickname, wallet_address, private_key) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-            (email, hashed_password, nickname, wallet_address, private_key)
-        )
-        user_id = cursor.fetchone()['id']
-
-        # Inicializa o saldo
-        cursor.execute(
-            "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
-            (user_id, 0.0)
-        )
-
-        conn.commit()
-
-        # Mock token para login instantâneo
-        auth_token = f"mock_token_{user_id}_{int(time.time())}"
-
-        return jsonify({
-            "success": True,
-            "message": "User registered successfully",
-            "user": {
-                "id": user_id,
-                "email": email,
-                "nickname": nickname,
-                "wallet_address": wallet_address
-            },
-            "token": auth_token
-        }), 201
-
-    except Exception as e:
-        conn.rollback()
-        print(f"❌ Erro no registro: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-# 🔑 ROTA DE LOGIN
-@app.route("/login", methods=["POST"])
-def login_user():
-    data = request.json
-    email = data.get("email")
-    password = data.get("password")
-
-    if not email or not password:
-        return jsonify({"error": "Email and password are required"}), 400
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("SELECT id, email, nickname, wallet_address, private_key, password FROM users WHERE email = %s", (email,))
-        user_data = cursor.fetchone()
-
-        if not user_data or not check_password_hash(user_data["password"], password):
-            return jsonify({"error": "Invalid credentials"}), 401
-
-        user = dict(user_data)
-        del user["password"]
-
-        auth_token = f"mock_token_{user['id']}_{int(time.time())}"
-
-        cursor.execute("SELECT available, locked, staking_balance FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user["id"],))
-        balance_data = cursor.fetchone()
-        
-        balance = {"available_balance": 0.0, "locked_balance": 0.0, "staking_balance": 0.0, "total_balance": 0.0}
-        if balance_data:
-            balance["available_balance"] = float(balance_data["available"]) if balance_data["available"] else 0.0
-            balance["staking_balance"] = float(balance_data["staking_balance"]) if balance_data["staking_balance"] else 0.0
-            balance["total_balance"] = balance["available_balance"] + balance["staking_balance"]
-
-        return jsonify({
-            "user": user, 
-            "token": auth_token, 
-            "message": "Login successful", 
-            "balance": balance
-        }), 200
-        
-    except Exception as e:
-        print(f"❌ Erro no login: {e}")
-        return jsonify({"error": f"An unexpected error occurred: {e}"}), 500
-    finally:
-        conn.close()
-
-# ⚙️ ROTA DE SETUP INICIAL (PARA USUÁRIOS CRIADOS VIA COMPRA)
-@app.route("/first-time-setup", methods=["POST"])
-def first_time_setup():
-    data = request.json
-    email = data.get('email')
-    password = data.get('password')
-    nickname = data.get('nickname')
-
-    if not email or not password or not nickname:
-        return jsonify({"error": "Email, password, and nickname are required"}), 400
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    try:
-        cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-
-        if not user:
-            return jsonify({"error": "Email não encontrado"}), 404
-
-        cursor.execute("SELECT password FROM users WHERE email = %s AND password IS NOT NULL", (email,))
-        if cursor.fetchone():
-            return jsonify({"error": "Conta já está ativa. Use o login normal."}), 400
-
-        hashed_password = generate_password_hash(password)
-        cursor.execute(
-            "UPDATE users SET password = %s, nickname = %s, updated_at = CURRENT_TIMESTAMP WHERE email = %s RETURNING id, wallet_address",
-            (hashed_password, nickname, email)
-        )
-        user = cursor.fetchone()
-
-        cursor.execute("SELECT available, staking_balance FROM balances WHERE user_id = %s", (user['id'],))
-        balance_data = cursor.fetchone()
-
-        conn.commit()
-
-        auth_token = f"mock_token_{user['id']}_{int(time.time())}"
-
-        return jsonify({
-            "success": True,
-            "user": {
-                "id": user['id'],
-                "email": email,
-                "nickname": nickname,
-                "wallet_address": user['wallet_address']
-            },
-            "token": auth_token,
-            "balance": {
-                "available_balance": float(balance_data['available']) if balance_data else 0.0,
-                "staking_balance": float(balance_data['staking_balance']) if balance_data else 0.0,
-                "total_balance": (float(balance_data['available']) if balance_data else 0.0) + 
-                               (float(balance_data['staking_balance']) if balance_data else 0.0)
-            }
-        }), 200
-
-    except Exception as e:
-        conn.rollback()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-# 🔍 ROTA PARA CHECAR SE O USUÁRIO EXISTE
-@app.route("/check-user", methods=["POST"])
-def check_user():
-    data = request.json
-    email = data.get('email')
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("SELECT id, password FROM users WHERE email = %s", (email,))
-        user = cursor.fetchone()
-        
-        if not user:
-            return jsonify({
-                "exists": False,
-                "has_password": False,
-                "has_purchase": False
-            }), 200
-        
-        cursor.execute("SELECT id FROM payments WHERE email = %s AND status = 'completed'", (email,))
-        has_purchase = cursor.fetchone() is not None
-        
-        return jsonify({
-            "exists": True,
-            "has_password": user['password'] is not None,
-            "has_purchase": has_purchase
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
-
-# ✅ ROTA DE HEALTH CHECK - PRODUÇÃO (ATUALIZADA)
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "service": "Allianza Wallet Backend",
-        "version": "1.0.0",
-        "environment": "production",
-        "stripe_available": STRIPE_AVAILABLE,
-        "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
-        "direct_crypto_available": DIRECT_CRYPTO_AVAILABLE,
-        "pagarme_pix_available": True,
-        "pagarme_pix_url": PAGARME_PIX_URL,
-        "keep_alive_active": True,
-        "vault_system_active": True,
-        "crypto_payments_active": True,
-        "response_time": "instant"
-    }), 200
-
-# ✅ Rota para informações do sistema - PRODUÇÃO (ATUALIZADA)
-@app.route('/system/info', methods=['GET'])
-def system_info():
-    return jsonify({
-        "service": "Allianza Wallet Backend",
-        "version": "1.0.0",
-        "timestamp": datetime.now().isoformat(),
-        "webhooks": {
-            "stripe": "/webhook/stripe"
-        },
-        "payment_methods": {
-            "stripe_available": STRIPE_AVAILABLE,
-            "stripe_version": "8.0.0",
-            "stripe_environment": "production" if stripe and stripe.api_key and stripe.api_key.startswith('sk_live_') else "test",
-            "pagarme_pix_available": True,
-            "pagarme_pix_url": PAGARME_PIX_URL,
-            "neon_database": True,
-            "direct_crypto_available": DIRECT_CRYPTO_AVAILABLE,
-            "crypto_payments": True
-        },
-        "direct_crypto_system": {
-            "active": DIRECT_CRYPTO_AVAILABLE,
-            "endpoints": [
-                "/api/direct-crypto/create-payment",
-                "/api/direct-crypto/payment-status",
-                "/api/direct-crypto/verify-payment",
-                "/api/direct-crypto/supported-currencies"
-            ],
-            "features": [
-                "no_intermediaries",
-                "direct_wallet_payments", 
-                "multiple_currencies",
-                "manual_verification",
-                "automatic_bonus"
-            ]
-        },
-        "vault_system": {
-            "active": True,
-            "endpoints": [
-                "/api/vault/balance",
-                "/api/vault/transfer", 
-                "/api/vault/initialize",
-                "/api/vault/security/settings",
-                "/api/vault/stats",
-                "/api/vault/security/withdraw-request",
-                "/api/vault/security/confirm-withdraw",
-                "/api/vault/security/cancel-withdraw"
-            ],
-            "features": [
-                "hot_wallet_management",
-                "cold_wallet_protection", 
-                "security_levels",
-                "auto_transfer_thresholds",
-                "transfer_history",
-                "two_factor_withdrawals"
-            ]
-        },
-        "keep_alive": {
-            "active": True,
-            "interval": "4 minutes",
-            "purpose": "Prevent Render.com hibernation"
-        },
-        "cors_domains": [
-            "http://localhost:5173",
-            "http://localhost:5174",
-            "http://127.0.0.1:5173",
-            "http://127.0.0.1:5174",
-            "https://allianza.tech",
-            "https://admin.allianza.tech", 
-            "https://wallet.allianza.tech"
-        ]
-    }), 200
-
-# ✅ ENDPOINT DE DIAGNÓSTICO STRIPE - PRODUÇÃO
-@app.route('/debug/stripe', methods=['GET'])
-def debug_stripe():
-    is_production = stripe and stripe.api_key and stripe.api_key.startswith('sk_live_')
-    return jsonify({
-        'stripe_available': STRIPE_AVAILABLE,
-        'stripe_installed': STRIPE_AVAILABLE,
-        'stripe_version': "8.0.0",
-        'api_key_configured': bool(stripe.api_key) if STRIPE_AVAILABLE else False,
-        'environment': 'production' if is_production else 'test',
-        'env_key_exists': bool(os.getenv('STRIPE_SECRET_KEY')),
-        'status': 'Operational' if STRIPE_AVAILABLE else 'Not Available'
-    }), 200
-
-# ✅ ROTAS PARA BALANCES E LEDGER
-@app.route('/balances/me', methods=['GET'])
-@token_required
-def get_balances_me():
-    try:
-        user_id = request.user_id
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT available, locked, staking_balance FROM balances WHERE user_id = %s AND asset = 'ALZ'", (user_id,))
-        balance_data = cursor.fetchone()
-        
-        balance = {"available_balance": 0.0, "locked_balance": 0.0, "staking_balance": 0.0, "total_balance": 0.0, "asset": "ALZ"}
-        
-        if balance_data:
-            balance["available_balance"] = float(balance_data["available"]) if balance_data["available"] else 0.0
-            balance["locked_balance"] = float(balance_data["locked"]) if balance_data["locked"] else 0.0
-            balance["staking_balance"] = float(balance_data["staking_balance"]) if balance_data["staking_balance"] else 0.0
-            balance["total_balance"] = balance["available_balance"] + balance["staking_balance"]
-            
-        return jsonify({"balance": balance}), 200
-        
-    except Exception as e:
-        print(f"❌ Erro ao buscar saldo: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/ledger/history', methods=['GET'])
-@token_required
-def get_ledger_history():
-    try:
-        user_id = request.user_id
-        limit = request.args.get('limit', 50, type=int)
-        offset = request.args.get('offset', 0, type=int)
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT id, asset, amount, entry_type, description, created_at 
-            FROM ledger_entries 
-            WHERE user_id = %s
-            ORDER BY created_at DESC
-            LIMIT %s OFFSET %s
-        ''', (user_id, limit, offset))
-        entries = cursor.fetchall()
-        
-        # Converte o resultado para um formato JSON serializável
-        data_list = []
-        for entry in entries:
-            entry_dict = dict(entry)
-            entry_dict['amount'] = float(entry_dict['amount'])
-            data_list.append(entry_dict)
-            
-        return jsonify({"history": data_list}), 200
-        
-    except Exception as e:
-        print(f"❌ Erro ao buscar histórico do ledger: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-# 🔄 Rota para Admin do Site - PRODUÇÃO (COM DEBUG CORRIGIDO)
-@app.route('/api/site/admin/payments', methods=['GET'])
-def site_admin_payments():
-    """Listar pagamentos para o admin do site - PRODUÇÃO CORRIGIDA"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        print("=" * 50)
-        print("🔐 ADMIN PAYMENTS - VERIFICAÇÃO DE TOKEN")
-        print(f"📨 Header: {auth_header}")
-        
-        if not auth_header.startswith('Bearer '):
-            print("❌ Header não começa com Bearer")
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        print(f"🔑 Token recebido: '{admin_token}'")
-        print(f"🔑 Token esperado: '{expected_token}'")
-        print(f"✅ São iguais? {admin_token == expected_token}")
-        
-        if not admin_token:
-            print("❌ Token vazio")
-            return jsonify({"error": "Token vazio"}), 401
-            
-        if admin_token != expected_token:
-            print("❌ Tokens não coincidem!")
-            print(f"   Recebido: '{admin_token}'")
-            print(f"   Esperado: '{expected_token}'")
-            print(f"   Comprimento recebido: {len(admin_token)}")
-            print(f"   Comprimento esperado: {len(expected_token)}")
-            return jsonify({"error": "Token inválido"}), 401
-        
-        print("✅ Token válido! Processando requisição...")
-        print("=" * 50)
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT p.id, p.email, p.amount, p.method, p.status, p.created_at, 
-                   p.processed_at, u.wallet_address, u.nickname, p.metadata
-            FROM payments p
-            LEFT JOIN users u ON p.user_id = u.id
-            ORDER BY p.created_at DESC
-        ''')
-        payments = cursor.fetchall()
-        
-        print(f"✅ Retornando {len(payments)} pagamentos")
-        
-        # Converte o resultado para um formato JSON serializável
-        data_list = []
-        for payment in payments:
-            payment_dict = dict(payment)
-            # Converte valores numéricos (Decimal) para float para JSON
-            payment_dict['amount'] = float(payment_dict['amount'])
-            
-            # ✅✅✅ CORREÇÃO CRÍTICA: NÃO DIVIDIR POR 0.10 NOVAMENTE!
-            # O valor já está correto no metadata ou no amount
-            if payment_dict['metadata'] and payment_dict['metadata'].get('alz_amount'):
-                payment_dict['alz_amount'] = float(payment_dict['metadata']['alz_amount'])
-                print(f"💰 Usando metadata: R$ {payment_dict['amount']} → {payment_dict['alz_amount']} ALZ | Método: {payment_dict['method']}")
-            else:
-                # ✅ CORREÇÃO: Usar o amount diretamente (já está em ALZ após processamento)
-                payment_dict['alz_amount'] = float(payment_dict['amount'])
-                print(f"💰 Usando amount direto: {payment_dict['alz_amount']} ALZ | Método: {payment_dict['method']}")
-                
-            # O metadata já é um JSONB, mas garantimos que seja um dict
-            if payment_dict['metadata'] is None:
-                payment_dict['metadata'] = {}
-                
-            data_list.append(payment_dict)
-
-        return jsonify({
-            "success": True,
-            "data": data_list
-        }), 200
-        
-    except Exception as e:
-        print(f"❌ Erro em admin/payments: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-# 🔄 Rota para estatísticas do admin do site - PRODUÇÃO
-@app.route('/api/site/admin/stats', methods=['GET'])
-def site_admin_stats():
-    """Estatísticas para o admin do site - PRODUÇÃO"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        if not admin_token or admin_token != expected_token:
-            return jsonify({"error": "Token inválido"}), 401
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT 
-                COUNT(*) as total_payments,
-                COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_payments,
-                COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_payments,
-                SUM(amount) as total_amount,
-                SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END) as completed_amount
-            FROM payments
-        ''')
-        payment_stats = cursor.fetchone()
-        
-        cursor.execute("SELECT COUNT(*) as total_users FROM users")
-        user_stats = cursor.fetchone()
-        
-        TOTAL_SUPPLY = 1000000000
-        cursor.execute("SELECT SUM(available + staking_balance) as circulating FROM balances WHERE asset = 'ALZ'")
-        circulating_result = cursor.fetchone()
-        circulating = circulating_result['circulating'] or 0
-        
-        cursor.execute("SELECT SUM(amount) as pending FROM payments WHERE status = 'pending'")
-        pending_result = cursor.fetchone()
-        pending = pending_result['pending'] or 0
-        
-        return jsonify({
-            "success": True,
-            "stats": {
-                "payments": dict(payment_stats),
-                "users": dict(user_stats),
-                "supply": {
-                    "total": TOTAL_SUPPLY,
-                    "circulating": float(circulating),
-                    "pending_distribution": float(pending),
-                    "reserve": TOTAL_SUPPLY - float(circulating) - float(pending)
-                }
-            }
-        }), 200
-        
-    except Exception as e:
-        print(f"❌ Erro stats: {e}")
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-# 🔄 Processar Pagamentos PIX Manualmente (Admin) - CORREÇÃO CRÍTICA
-@app.route('/api/site/admin/process-payments', methods=['POST'])
-def site_admin_process_payments():
-    """Processar pagamentos PIX manualmente - CORREÇÃO DOS VALORES"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        if not admin_token or admin_token != expected_token:
-            return jsonify({"error": "Token inválido"}), 401
-        
-        data = request.json
-        payment_ids = data.get('payment_ids', [])
-        
-        if not payment_ids:
-            return jsonify({"error": "Nenhum pagamento selecionado"}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("BEGIN")
-            
-            processed_count = 0
-            
-            for payment_id in payment_ids:
-                cursor.execute(
-                    "SELECT id, email, amount, user_id, method, metadata FROM payments WHERE id = %s AND status = 'pending'",
-                    (payment_id,)
-                )
-                payment = cursor.fetchone()
-                
-                if payment and payment['user_id']:
-                    
-                    # ✅✅✅ CORREÇÃO CRÍTICA: Calcular ALZ CORRETAMENTE
-                    # O amount no banco está em BRL, então converter para ALZ
-                    alz_amount_to_credit = float(payment['amount']) / 0.10  # R$ 20,00 / 0.10 = 200 ALZ
-                    
-                    # Se tiver metadata, usar o valor do metadata (que já deve estar correto)
-                    if payment['metadata'] and payment['metadata'].get('alz_amount'):
-                        alz_amount_to_credit = float(payment['metadata']['alz_amount'])
-                        
-                    print(f"💰 PROCESSANDO: R$ {payment['amount']} → {alz_amount_to_credit} ALZ para {payment['email']} | Método: {payment['method']}")
-                    
-                    # Creditar o valor em ALZ
-                    cursor.execute(
-                        "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                        (alz_amount_to_credit, payment['user_id'])
-                    )
-                    
-                    # Registrar no ledger
-                    cursor.execute(
-                        "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, related_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (payment['user_id'], 'ALZ', alz_amount_to_credit, 'purchase', f'Compra {payment["method"]} processada - Payment ID: {payment_id}', payment_id)
-                    )
-                    
-                    # COMPENSAR TAXAS PARA CRIPTO
-                    if payment['method'] == 'crypto' or payment['method'] == 'direct_crypto':
-                        bonus_amount = alz_amount_to_credit * 0.02
-                        cursor.execute(
-                            "UPDATE balances SET available = available + %s WHERE user_id = %s",
-                            (bonus_amount, payment['user_id'])
-                        )
-                        cursor.execute(
-                            "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, related_id) VALUES (%s, %s, %s, %s, %s, %s)",
-                            (payment['user_id'], 'ALZ', bonus_amount, 'fee_compensation', '🎁 Bônus compensação de taxa crypto', payment_id)
-                        )
-                        print(f"🎁 Bônus aplicado: +{bonus_amount} ALZ")
-                    
-                    # Atualizar status
-                    cursor.execute(
-                        "UPDATE payments SET status = 'completed', processed_at = CURRENT_TIMESTAMP WHERE id = %s",
-                        (payment_id,)
-                    )
-                    
-                    processed_count += 1
-                    print(f"✅ Tokens creditados: {alz_amount_to_credit} ALZ para pagamento {payment_id}")
-            
-            conn.commit()
-            
-            return jsonify({
-                "success": True,
-                "message": f"{processed_count} pagamentos processados com sucesso",
-                "processed_count": processed_count
-            }), 200
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ Erro process-payments: {e}")
-            return jsonify({"error": str(e)}), 500
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        print(f"❌ Erro geral process-payments: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# 🚀 ENVIO MANUAL DE TOKENS (ADMIN)
-@app.route('/api/site/admin/manual-token-send', methods=['POST'])
-def site_admin_manual_token_send():
-    """Envio manual de tokens por administrador"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        if not admin_token or admin_token != expected_token:
-            return jsonify({"error": "Token inválido"}), 401
-        
-        data = request.json
-        email = data.get('email')
-        amount = data.get('amount')
-        description = data.get('description', 'Crédito administrativo manual')
-        admin_user = data.get('admin_user', 'admin')
-        
-        if not email or not amount:
-            return jsonify({"error": "Email e quantidade são obrigatórios"}), 400
-        
-        try:
-            amount = float(amount)
-        except ValueError:
-            return jsonify({"error": "Quantidade inválida"}), 400
-        
-        if amount <= 0:
-            return jsonify({"error": "Quantidade deve ser positiva"}), 400
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        try:
-            cursor.execute("BEGIN")
-            
-            # Buscar usuário
-            cursor.execute("SELECT id, wallet_address FROM users WHERE email = %s", (email,))
-            user = cursor.fetchone()
-            
-            if not user:
-                return jsonify({"error": "Usuário não encontrado"}), 404
-            
-            user_id = user['id']
-            
-            # Verificar/criar saldo
-            cursor.execute("SELECT user_id FROM balances WHERE user_id = %s", (user_id,))
-            if not cursor.fetchone():
-                cursor.execute(
-                    "INSERT INTO balances (user_id, available) VALUES (%s, %s)",
-                    (user_id, 0.0)
-                )
-            
-            # Creditar tokens
-            cursor.execute(
-                "UPDATE balances SET available = available + %s, updated_at = CURRENT_TIMESTAMP WHERE user_id = %s",
-                (amount, user_id)
-            )
-            
-            # Registrar no ledger
-            cursor.execute(
-                "INSERT INTO ledger_entries (user_id, asset, amount, entry_type, description, idempotency_key) VALUES (%s, %s, %s, %s, %s, %s)",
-                (user_id, 'ALZ', amount, 'manual_credit', description, f'manual_{user_id}_{int(time.time())}')
-            )
-            
-            # Registrar log administrativo
-            cursor.execute(
-                "INSERT INTO admin_logs (admin_user, action, description, target_id) VALUES (%s, %s, %s, %s)",
-                (admin_user, 'manual_token_send', f'Enviou {amount} ALZ para {email}', user_id)
-            )
-            
-            conn.commit()
-            
-            print(f"✅ Envio manual realizado: {amount} ALZ para {email}")
-            
-            return jsonify({
-                "success": True,
-                "message": f"{amount} ALZ enviados com sucesso para {email}",
-                "amount": amount,
-                "email": email
-            }), 200
-            
-        except Exception as e:
-            conn.rollback()
-            print(f"❌ Erro no envio manual: {e}")
-            return jsonify({"error": str(e)}), 500
-        finally:
-            conn.close()
-            
-    except Exception as e:
-        print(f"❌ Erro geral envio manual: {e}")
-        return jsonify({"error": str(e)}), 500
-
-# 🔧 ROTA PARA CRIAR TABELA STAKING MANUALMENTE
-@app.route('/api/site/admin/create-staking-table', methods=['POST'])
-def create_staking_table():
-    """Criar tabela de staking manualmente"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        if not admin_token or admin_token != expected_token:
-            return jsonify({"error": "Token inválido"}), 401
-        
-        # Executar a criação da tabela
-        # init_db() # Comentado para permitir que o servidor inicie sem a URL do banco de dados
-        
-        return jsonify({
-            "success": True,
-            "message": "Tabela de staking criada/verificada com sucesso!"
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# 🔍 ROTA PARA VERIFICAR TABELAS
-@app.route('/api/site/admin/check-tables', methods=['GET'])
-def check_tables():
-    """Verificar se a tabela stakes existe"""
-    try:
-        auth_header = request.headers.get('Authorization', '')
-        
-        if not auth_header.startswith('Bearer '):
-            return jsonify({"error": "Token não fornecido"}), 401
-        
-        admin_token = auth_header.replace('Bearer ', '').strip()
-        expected_token = SITE_ADMIN_TOKEN
-        
-        if not admin_token or admin_token != expected_token:
-            return jsonify({"error": "Token inválido"}), 401
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT table_name 
-            FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name = 'stakes'
-        """)
-        
-        table_exists = cursor.fetchone() is not None
-        
-        # Verificar também a estrutura da tabela
-        if table_exists:
-            cursor.execute("""
-                SELECT column_name, data_type 
-                FROM information_schema.columns 
-                WHERE table_name = 'stakes'
-            """)
-            columns = cursor.fetchall()
-            column_names = [col['column_name'] for col in columns]
-        
-        return jsonify({
-            "stakes_table_exists": table_exists,
-            "columns": column_names if table_exists else [],
-            "message": "Tabela de staking encontrada!" if table_exists else "Tabela de staking NÃO encontrada!"
-        }), 200
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
+# Ajustar redirecionamento para garantir compatibilidade
+@app.route('/health', methods=['GET', 'OPTIONS'])
+def root_health_check():
+    return jsonify({"status": "OK", "message": "Backend is running"}), 200
 
 # 🚀 INICIALIZAÇÃO DO FLASK
 if __name__ == '__main__':
